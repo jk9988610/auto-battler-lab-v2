@@ -80,9 +80,28 @@ export function attachSocket(http: HttpServer) {
       }
       const room = r as Rooms.Room;
       socket.join(room.id);
-      if (cb) cb({ ok: true, room: Rooms.sanitizeRoom(room) });
+      const g = Games.getGame(room.id);
+      if (cb) cb({ ok: true, room: Rooms.sanitizeRoom(room), hasGame: !!g });
       broadcastRoom(room);
       broadcastList();
+      if (g) socket.emit("game:state", g);
+    });
+
+    socket.on("room:rejoin", function (cb?: (r: unknown) => void) {
+      const r = Rooms.rejoinRoom(user.uid, socket.id);
+      if ((r as any).error) {
+        if (cb) cb({ ok: false, error: (r as any).error });
+        return;
+      }
+      const room = (r as any).room as Rooms.Room;
+      socket.join(room.id);
+      const g = Games.getGame(room.id);
+      if (cb) cb({ ok: true, room: Rooms.sanitizeRoom(room), hasGame: !!g });
+      // 广播给房间内所有人，让其他人看到 A 在线状态变化
+      io.to(room.id).emit("room:update", Rooms.sanitizeRoom(room));
+      broadcastList();
+      if (g) socket.emit("game:state", g);
+      console.log("[socket] rejoin uid=" + user.uid + " room=" + room.id + " hasGame=" + !!g);
     });
 
     socket.on("room:leave", function (cb?: (r: unknown) => void) {
@@ -218,6 +237,21 @@ export function attachSocket(http: HttpServer) {
       if (cb) cb({ ok: true });
     });
 
+    socket.on("game:upgrade", function (cb?: (r: unknown) => void) {
+      const g = findGameBySocket(socket.id);
+      if (!g) { if (cb) cb({ ok: false, error: "no game" }); return; }
+      const res = Games.playerUpgrade(g.roomId, user.uid);
+      if (!res.ok) { if (cb) cb({ ok: false, error: res.error }); return; }
+      io.to(g.roomId).emit("game:upgraded", {
+        uid: user.uid,
+        username: user.username,
+        newTier: res.newTier,
+        cost: res.cost,
+      });
+      if (res.state) broadcastGame(res.state);
+      if (cb) cb({ ok: true });
+    });
+
     socket.on("game:debug-triple", function (cb?: (r: unknown) => void) {
       const g = findGameBySocket(socket.id);
       if (!g) { if (cb) cb({ ok: false, error: "no game" }); return; }
@@ -241,14 +275,7 @@ export function attachSocket(http: HttpServer) {
 
     socket.on("disconnect", function (reason) {
       console.log("[socket] disconnect uid=" + user.uid + " reason=" + reason);
-      const result = Rooms.leaveRoom(socket.id);
-      if (result.roomId) {
-        const g = Games.getGame(result.roomId);
-        if (g) {
-          Games.removeGame(result.roomId);
-          io.to(result.roomId).emit("game:closed", { roomId: result.roomId });
-        }
-      }
+      const result = Rooms.markOffline(socket.id);
       if (result.room) broadcastRoom(result.room);
       broadcastList();
     });

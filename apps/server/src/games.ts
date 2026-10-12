@@ -36,6 +36,11 @@ export interface BattlePairing {
   bUid: number;
   bName: string;
   bPower: number;
+  aBoard: Card[];
+  bBoard: Card[];
+  aSurvivors: Card[];
+  bSurvivors: Card[];
+  battleLog: string[];
   winnerUid: number;
   loserUid: number;
   damage: number;
@@ -56,26 +61,51 @@ const MAX_GOLD = 10;
 const GOLD_PER_TURN = 3;
 const SHOP_SIZE = 3;
 const BOARD_SIZE = 7;
+const MAX_TIER = 6;
+
+const UPGRADE_COST: { [k: number]: number } = {
+  1: 5,
+  2: 7,
+  3: 8,
+  4: 9,
+  5: 10,
+};
 
 const CARD_POOL: Array<{ name: string; tier: number; attack: number; hp: number }> = [
   { name: "铁匠学徒", tier: 1, attack: 1, hp: 1 },
   { name: "森林鹿", tier: 1, attack: 2, hp: 2 },
   { name: "石甲卫兵", tier: 1, attack: 1, hp: 3 },
+  { name: "村庄农夫", tier: 1, attack: 1, hp: 2 },
+  { name: "小精灵", tier: 1, attack: 2, hp: 1 },
   { name: "荒野狼", tier: 2, attack: 3, hp: 2 },
   { name: "火焰法师", tier: 2, attack: 2, hp: 3 },
-  { name: "暗影刺客", tier: 3, attack: 4, hp: 1 },
-  { name: "白银枪骑", tier: 4, attack: 3, hp: 5 },
+  { name: "石像鬼", tier: 2, attack: 3, hp: 3 },
+  { name: "长剑兵", tier: 2, attack: 4, hp: 2 },
+  { name: "暗影刺客", tier: 3, attack: 4, hp: 2 },
+  { name: "铁甲卫", tier: 3, attack: 3, hp: 5 },
+  { name: "冰霜法师", tier: 3, attack: 4, hp: 4 },
+  { name: "白银枪骑", tier: 4, attack: 4, hp: 6 },
+  { name: "雷霆领主", tier: 4, attack: 5, hp: 7 },
+  { name: "龙骑兵", tier: 5, attack: 7, hp: 7 },
+  { name: "火焰元素", tier: 5, attack: 8, hp: 6 },
+  { name: "时空龙", tier: 6, attack: 10, hp: 10 },
+  { name: "深渊魔君", tier: 6, attack: 12, hp: 8 },
 ];
 
-function randCard(): Card {
-  const tpl = CARD_POOL[Math.floor(Math.random() * CARD_POOL.length)];
+function goldForTurn(t: number): number {
+  return Math.min(3 + (t - 1), MAX_GOLD);
+}
+
+function randCard(maxTier: number): Card {
+  const pool = CARD_POOL.filter(function (c) { return c.tier <= maxTier; });
+  const tpl = pool[Math.floor(Math.random() * pool.length)];
   const uid = Math.random().toString(36).slice(2, 8);
   return { id: uid, name: tpl.name, tier: tpl.tier, attack: tpl.attack, hp: tpl.hp };
 }
 
-function randShop(): Card[] {
+function randShop(maxTier: number): Card[] {
   const arr: Card[] = [];
-  for (let i = 0; i < SHOP_SIZE; i++) arr.push(randCard());
+  for (let i = 0; i < SHOP_SIZE; i++) arr.push(randCard(maxTier));
   return arr;
 }
 
@@ -151,7 +181,7 @@ export function startGame(roomId: string, players: { uid: number; username: stri
         ready: false,
         frozen: false,
         alive: true,
-        shop: randShop(),
+        shop: randShop(1),
         hand: [],
         board: [],
         tavernTier: 1,
@@ -171,6 +201,62 @@ function findPlayer(g: GameState, uid: number): PlayerState | undefined {
   return g.players.find(function (x) { return x.uid === uid; });
 }
 
+function simulateBoardBattle(aBoard: Card[], bBoard: Card[]): {
+  winnerSide: "a" | "b" | "draw";
+  damage: number;
+  battleLog: string[];
+  aSurvivors: Card[];
+  bSurvivors: Card[];
+} {
+  const A = aBoard.map(function (c) { return { id: c.id, name: c.name, tier: c.tier, attack: c.attack, hp: c.hp, golden: c.golden }; });
+  const B = bBoard.map(function (c) { return { id: c.id, name: c.name, tier: c.tier, attack: c.attack, hp: c.hp, golden: c.golden }; });
+  const battleLog: string[] = [];
+  const MAX_ROUNDS = 30;
+  let round = 0;
+
+  while (A.length > 0 && B.length > 0 && round < MAX_ROUNDS) {
+    round += 1;
+    if (A.length > 0 && B.length > 0) {
+      const atkA = A[0];
+      const defB = B[0];
+      const before = defB.hp;
+      defB.hp -= atkA.attack;
+      battleLog.push("R" + round + " " + atkA.name + " -> " + defB.name + " (" + before + "->" + defB.hp + ")");
+      if (defB.hp <= 0) {
+        battleLog.push(defB.name + " 阵亡");
+        B.shift();
+      }
+    }
+    if (A.length === 0 || B.length === 0) break;
+    if (A.length > 0 && B.length > 0) {
+      const atkB = B[0];
+      const defA = A[0];
+      const before = defA.hp;
+      defA.hp -= atkB.attack;
+      battleLog.push("R" + round + " " + atkB.name + " -> " + defA.name + " (" + before + "->" + defA.hp + ")");
+      if (defA.hp <= 0) {
+        battleLog.push(defA.name + " 阵亡");
+        A.shift();
+      }
+    }
+  }
+
+  const aAlive = A.length > 0;
+  const bAlive = B.length > 0;
+
+  if (aAlive && !bAlive) {
+    let dmg = 0;
+    A.forEach(function (c) { dmg += c.attack; });
+    return { winnerSide: "a", damage: Math.max(1, dmg), battleLog: battleLog, aSurvivors: A, bSurvivors: [] };
+  }
+  if (bAlive && !aAlive) {
+    let dmg = 0;
+    B.forEach(function (c) { dmg += c.attack; });
+    return { winnerSide: "b", damage: Math.max(1, dmg), battleLog: battleLog, aSurvivors: [], bSurvivors: B };
+  }
+  return { winnerSide: "draw", damage: 1, battleLog: battleLog, aSurvivors: A, bSurvivors: B };
+}
+
 function runBattle(g: GameState): BattleResult {
   const alive = g.players.filter(function (p) { return p.alive; });
   const order = shuffle(alive);
@@ -179,21 +265,22 @@ function runBattle(g: GameState): BattleResult {
   for (let i = 0; i + 1 < order.length; i += 2) {
     const a = order[i];
     const b = order[i + 1];
+    const sim = simulateBoardBattle(a.board, b.board);
     const ap = boardPower(a);
     const bp = boardPower(b);
     let winnerUid: number;
     let loserUid: number;
     let damage: number;
 
-    if (ap === bp) {
+    if (sim.winnerSide === "draw") {
       winnerUid = a.uid; loserUid = b.uid;
       damage = 1;
-    } else if (ap > bp) {
+    } else if (sim.winnerSide === "a") {
       winnerUid = a.uid; loserUid = b.uid;
-      damage = Math.max(1, boardAttack(a));
+      damage = sim.damage;
     } else {
       winnerUid = b.uid; loserUid = a.uid;
-      damage = Math.max(1, boardAttack(b));
+      damage = sim.damage;
     }
 
     const loser = loserUid === a.uid ? a : b;
@@ -202,6 +289,11 @@ function runBattle(g: GameState): BattleResult {
     pairings.push({
       aUid: a.uid, aName: a.username, aPower: ap,
       bUid: b.uid, bName: b.username, bPower: bp,
+      aBoard: a.board.slice(),
+      bBoard: b.board.slice(),
+      aSurvivors: sim.aSurvivors,
+      bSurvivors: sim.bSurvivors,
+      battleLog: sim.battleLog,
       winnerUid: winnerUid, loserUid: loserUid, damage: damage,
     });
   }
@@ -263,8 +355,8 @@ export function playerEndTurn(
     g.players.forEach(function (x) {
       if (!x.alive) return;
       x.ready = false;
-      x.gold = Math.min(x.gold + GOLD_PER_TURN, MAX_GOLD);
-      if (!x.frozen) x.shop = randShop();
+      x.gold = Math.min(x.gold + goldForTurn(g.turn), MAX_GOLD);
+      if (!x.frozen) x.shop = randShop(x.tavernTier);
       x.frozen = false;
     });
   }
@@ -346,7 +438,7 @@ export function playerRefresh(roomId: string, uid: number): { ok: boolean; error
   if (p.frozen) return { ok: false, error: "shop is frozen" };
   if (p.gold < REFRESH_COST) return { ok: false, error: "not enough gold" };
   p.gold -= REFRESH_COST;
-  p.shop = randShop();
+  p.shop = randShop(p.tavernTier);
   return { ok: true, state: g };
 }
 
@@ -357,6 +449,23 @@ export function playerFreeze(roomId: string, uid: number): { ok: boolean; error?
   if (!p) return { ok: false, error: "not in game" };
   p.frozen = !p.frozen;
   return { ok: true, state: g };
+}
+
+export function playerUpgrade(
+  roomId: string,
+  uid: number
+): { ok: boolean; error?: string; state?: GameState; cost?: number; newTier?: number } {
+  const g = games.get(roomId);
+  if (!g) return { ok: false, error: "no game" };
+  const p = findPlayer(g, uid);
+  if (!p) return { ok: false, error: "not in game" };
+  if (!p.alive) return { ok: false, error: "eliminated" };
+  if (p.tavernTier >= MAX_TIER) return { ok: false, error: "max tier" };
+  const cost = UPGRADE_COST[p.tavernTier];
+  if (p.gold < cost) return { ok: false, error: "not enough gold" };
+  p.gold -= cost;
+  p.tavernTier += 1;
+  return { ok: true, state: g, cost: cost, newTier: p.tavernTier };
 }
 
 export function debugForceTriple(

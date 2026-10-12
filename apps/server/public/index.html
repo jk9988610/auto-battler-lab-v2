@@ -65,7 +65,7 @@ input, button { font-size: 14px; padding: 6px 10px; margin: 4px 4px 4px 0; }
 
 <script src="/socket.io/socket.io.js"></script>
 <script>
-var token = localStorage.getItem("token") || "";
+var token = sessionStorage.getItem("token") || "";
 var socket = null;
 var me = null;
 var currentRoom = null;
@@ -103,7 +103,7 @@ function doRegister() {
   api("/auth/register", { username: u, password: p }).then(function (r) {
     if (r.status === 200) {
       token = r.body.token;
-      localStorage.setItem("token", token);
+      sessionStorage.setItem("token", token);
       log("注册成功: " + r.body.user.username, "ok");
     } else {
       log("注册失败 " + r.status + ": " + JSON.stringify(r.body), "err");
@@ -117,7 +117,7 @@ function doLogin() {
   api("/auth/login", { username: u, password: p }).then(function (r) {
     if (r.status === 200) {
       token = r.body.token;
-      localStorage.setItem("token", token);
+      sessionStorage.setItem("token", token);
       log("登录成功: " + r.body.user.username, "ok");
     } else {
       log("登录失败 " + r.status + ": " + JSON.stringify(r.body), "err");

@@ -4,6 +4,8 @@ var _lastStateKey='';
 var _lastLine={};
 var gameOverLocked=false;
 var lastRankings=[];
+var autoConnectTried=false;
+var rejoinInFlight=false;
 
 var DARK_CSS = [
   "body{background:#0d0d0f !important;color:#e6e6e6 !important;font-family:system-ui,sans-serif;}",
@@ -57,6 +59,11 @@ function getMyUid(){
   return myUid;
 }
 
+function upgradeCostFor(tier){
+  var table = {1:5, 2:7, 3:8, 4:9, 5:10};
+  return table[tier] || 0;
+}
+
 function inject(){
   if(document.getElementById('view-game'))return;
   var logEl=document.getElementById('log');
@@ -77,7 +84,7 @@ function inject(){
     +'<div><b>我的场上</b>（最多7，战斗只用场上的卡）</div>'
     +'<div id="gBoard"></div>'
     +'<hr style="border-color:#2d2d33"/>'
-    +'<div><b>我的商店</b>（每张3金） <button onclick="doRefresh()">刷新(1金)</button> <button id="btnFreeze" onclick="doFreeze()">冻结</button> <button onclick="doDebugTriple()">三连测试</button></div>'
+    +'<div><b>我的商店</b>（每张3金） <button onclick="doRefresh()">刷新(1金)</button> <button id="btnFreeze" onclick="doFreeze()">冻结</button> <button id="btnUpgrade" onclick="doUpgrade()">升级酒馆</button> <button onclick="doDebugTriple()">三连测试</button></div>'
     +'<div id="gShop"></div>'
     +'<hr style="border-color:#2d2d33"/>'
     +'<div><b>我的手牌</b>（上阵/出售，3张同名同星合成金色）</div>'
@@ -164,6 +171,19 @@ function renderState(state){
   document.getElementById('gHp').textContent=me?String(me.hp):'-';
   document.getElementById('gTier').textContent=me?String(me.tavernTier||1):'-';
 
+  var btnUp = document.getElementById('btnUpgrade');
+  if(btnUp && me){
+    var tier = me.tavernTier||1;
+    if(tier >= 6){
+      btnUp.textContent = '已满级';
+      btnUp.disabled = true;
+    } else {
+      var cost = upgradeCostFor(tier);
+      btnUp.textContent = '升级酒馆(到' + (tier+1) + '级 ' + cost + '金)';
+      btnUp.disabled = me.gold < cost;
+    }
+  }
+
   var boardBox=document.getElementById('gBoard');
   boardBox.innerHTML='';
   if(me&&me.board&&me.board.length>0){
@@ -229,7 +249,7 @@ function renderState(state){
     var goldCount=0;
     (p.hand||[]).forEach(function(c){ if(c.golden)goldCount+=1; });
     var boardN=(p.board||[]).length;
-    var tags='金币:'+p.gold+' 血量:'+p.hp+' 场上:'+boardN+' 手牌:'+(p.hand?p.hand.length:0)+(goldCount>0?' 金卡'+goldCount:'')+' '+status;
+    var tags='T'+(p.tavernTier||1)+' 金币:'+p.gold+' 血量:'+p.hp+' 场上:'+boardN+' 手牌:'+(p.hand?p.hand.length:0)+(goldCount>0?' 金卡'+goldCount:'')+' '+status;
     row.textContent=p.username+'  '+tags;
     if(p.alive===false)row.style.color='#666';
     if(uid!=null&&p.uid===uid){row.style.fontWeight='bold';if(p.alive!==false)row.style.color='#c8a15a';}
@@ -247,14 +267,14 @@ function renderState(state){
   var stateKey=state.turn+'|'+state.phase+'|'+state.players.map(function(p){
     var handKey=(p.hand||[]).map(function(c){return c.name+(c.golden?'g':'');}).join('.');
     var boardKey=(p.board||[]).map(function(c){return c.name+(c.golden?'g':'');}).join('.');
-    return p.uid+':'+p.gold+':'+p.hp+':H['+handKey+']:B['+boardKey+']:'+(p.ready?1:0)+':'+(p.alive?1:0);
+    return p.uid+':'+(p.tavernTier||1)+':'+p.gold+':'+p.hp+':H['+handKey+']:B['+boardKey+']:'+(p.ready?1:0)+':'+(p.alive?1:0);
   }).join(',');
   if(stateKey!==_lastStateKey){
     _lastStateKey=stateKey;
     var summary=state.players.map(function(p){
       var goldCount=0;
       (p.hand||[]).forEach(function(c){ if(c.golden)goldCount+=1; });
-      return p.username+' 金'+p.gold+' 血'+p.hp+' 场'+(p.board?p.board.length:0)+' 手'+(p.hand?p.hand.length:0)+(goldCount>0?' 金卡'+goldCount:'')+(p.ready?' ✓':'')+(p.alive===false?' ✗淘汰':'');
+      return p.username+' T'+(p.tavernTier||1)+' 金'+p.gold+' 血'+p.hp+' 场'+(p.board?p.board.length:0)+' 手'+(p.hand?p.hand.length:0)+(goldCount>0?' 金卡'+goldCount:'')+(p.ready?' ✓':'')+(p.alive===false?' ✗淘汰':'');
     }).join(' | ');
     trace('state','T'+state.turn+' '+state.phase+'  '+summary);
   }
@@ -272,17 +292,98 @@ function renderBattle(battle){
   el.appendChild(head);
 
   battle.pairings.forEach(function(pr){
-    var row=document.createElement('div');
-    row.style.padding='3px 0';
-    var winnerIsA=pr.winnerUid===pr.aUid;
-    var vs=pr.aName+'('+pr.aPower+')  VS  '+pr.bName+'('+pr.bPower+')  →  '+(winnerIsA?pr.aName:pr.bName)+' 胜，对 '+(winnerIsA?pr.bName:pr.aName)+' 造成 '+pr.damage+' 伤害';
-    row.textContent=vs;
     var myUidLocal=getMyUid();
-    if(myUidLocal!=null && (pr.aUid===myUidLocal||pr.bUid===myUidLocal)){
-      row.style.color='#e6e6e6';
-      row.style.fontWeight='bold';
+    var isMyPair=(myUidLocal!=null && (pr.aUid===myUidLocal||pr.bUid===myUidLocal));
+    var block=document.createElement('div');
+    block.style.margin='8px 0';
+    block.style.padding='8px';
+    block.style.border='1px solid #33333a';
+    block.style.borderRadius='6px';
+    block.style.background=isMyPair?'#151a12':'#101013';
+
+    var winnerName=pr.winnerUid===pr.aUid?pr.aName:pr.bName;
+    var loserName=pr.winnerUid===pr.aUid?pr.bName:pr.aName;
+    var title=document.createElement('div');
+    title.textContent=winnerName+' 胜 · 对 '+loserName+' 造成 '+pr.damage+' 伤害';
+    title.style.fontWeight='bold';
+    title.style.color=isMyPair?'#c8a15a':'#888';
+    title.style.marginBottom='6px';
+    title.style.fontSize='13px';
+    block.appendChild(title);
+
+    var rowBox=document.createElement('div');
+    rowBox.style.display='flex';
+    rowBox.style.gap='10px';
+    rowBox.style.alignItems='stretch';
+
+    function sideBox(name, power, cards, isWinner, isMine){
+      var box=document.createElement('div');
+      box.style.flex='1';
+      box.style.minWidth='0';
+      box.style.padding='4px';
+      if(isMine){ box.style.boxShadow='0 0 0 2px #3d7d3d'; box.style.borderRadius='4px'; }
+      var head=document.createElement('div');
+      head.textContent=name+' ('+power+')'+(isWinner?' 胜':'');
+      head.style.fontWeight='bold';
+      head.style.color=isWinner?'#f5c542':'#aaa';
+      head.style.marginBottom='4px';
+      head.style.fontSize='12px';
+      box.appendChild(head);
+      if(!cards||cards.length===0){
+        var empty=document.createElement('div');
+        empty.textContent='空场';
+        empty.style.color='#555';
+        empty.style.fontSize='11px';
+        box.appendChild(empty);
+      } else {
+        cards.forEach(function(c){
+          var card=document.createElement('span');
+          var g=c.golden?' *':'';
+          card.textContent=c.name+g+' '+c.attack+'/'+c.hp;
+          card.style.display='inline-block';
+          card.style.padding='2px 5px';
+          card.style.margin='2px';
+          card.style.borderRadius='4px';
+          card.style.fontSize='11px';
+          card.style.border=c.golden?'2px solid #f5c542':'1px solid #444';
+          card.style.background=c.golden?'#2a220e':'#1a1a1d';
+          card.style.color=c.golden?'#ffd76a':'#ccc';
+          box.appendChild(card);
+        });
+      }
+      return box;
     }
-    el.appendChild(row);
+
+    rowBox.appendChild(sideBox(pr.aName, pr.aPower, pr.aSurvivors||[], pr.winnerUid===pr.aUid, myUidLocal===pr.aUid));
+    var vs=document.createElement('div');
+    vs.textContent='VS';
+    vs.style.color='#c8a15a';
+    vs.style.fontWeight='bold';
+    vs.style.alignSelf='center';
+    vs.style.fontSize='12px';
+    rowBox.appendChild(vs);
+    rowBox.appendChild(sideBox(pr.bName, pr.bPower, pr.bSurvivors||[], pr.winnerUid===pr.bUid, myUidLocal===pr.bUid));
+    block.appendChild(rowBox);
+    if(pr.battleLog && pr.battleLog.length>0){
+      var logBox=document.createElement('details');
+      logBox.style.marginTop='6px';
+      logBox.style.fontSize='11px';
+      var sum=document.createElement('summary');
+      sum.textContent='战报 ('+pr.battleLog.length+' 条)';
+      sum.style.cursor='pointer';
+      sum.style.color='#888';
+      logBox.appendChild(sum);
+      pr.battleLog.forEach(function(line){
+        var row=document.createElement('div');
+        row.textContent=line;
+        row.style.padding='1px 0';
+        row.style.color='#999';
+        if(/阵亡/.test(line)) row.style.color='#c66';
+        logBox.appendChild(row);
+      });
+      box.appendChild(logBox);
+    }
+    el.appendChild(block);
   });
 
   if(battle.eliminated&&battle.eliminated.length>0){
@@ -293,7 +394,7 @@ function renderBattle(battle){
     el.appendChild(elim);
   }
   battle.pairings.forEach(function(pr){
-    var line='[battle] T'+battle.turn+' '+pr.aName+'('+pr.aPower+') vs '+pr.bName+'('+pr.bPower+') → '+((pr.winnerUid===pr.aUid)?pr.aName:pr.bName)+' 胜 -'+pr.damage;
+    var line='[battle] T'+battle.turn+' '+pr.aName+'('+pr.aPower+') vs '+pr.bName+'('+pr.bPower+') -> '+((pr.winnerUid===pr.aUid)?pr.aName:pr.bName)+' 胜 -'+pr.damage;
     if(typeof window.log==='function')window.log(line,'');
   });
   if(battle.eliminated&&battle.eliminated.length>0){
@@ -347,7 +448,7 @@ function clearGameOver(){
 
 function patchShow(){
   if(typeof window.show!=='function')return;
-  if(window.show.__ab13)return;
+  if(window.show.__ab15)return;
   var orig=window.show;
   window.show=function(v){
     if(gameOverLocked && v!=='game'){
@@ -359,13 +460,54 @@ function patchShow(){
     var g=document.getElementById('view-game');
     if(g)g.className='hidden';
   };
-  window.show.__ab13=true;
+  window.show.__ab15=true;
+}
+
+function tryAutoConnect(){
+  if(autoConnectTried)return;
+  if(!sessionStorage.getItem("token"))return;
+  if(window.socket)return;
+  autoConnectTried=true;
+  if(typeof window.doConnect==='function'){
+    trace('init','检测到 token，自动重连...','');
+    window.doConnect();
+  }
+}
+
+function doRejoin(){
+  if(rejoinInFlight)return;
+  if(!window.socket)return;
+  rejoinInFlight=true;
+  window.socket.emit('room:rejoin', function(res){
+    rejoinInFlight=false;
+    if(res && res.ok && res.room){
+      if(typeof window.log==='function'){
+        window.log('[rejoin] 已恢复房间 ' + res.room.id + (res.hasGame ? ' (对局进行中)' : ''),'ok');
+      }
+      if(res.hasGame){
+        // 服务端也会 emit game:state，会触发 enterGame
+        enterGame();
+      } else {
+        if(typeof window.show==='function')window.show('room');
+      }
+    } else {
+      if(typeof window.log==='function')window.log('[rejoin] 未找到房间','');
+      if(typeof window.show==='function')window.show('lobby');
+      if(typeof window.loadRooms==='function')window.loadRooms();
+    }
+  });
 }
 
 function patchSocket(){
   if(!window.socket)return;
-  if(window.socket.__ab13)return;
-  window.socket.__ab13=true;
+  if(window.socket.__ab15)return;
+  window.socket.__ab15=true;
+
+  window.socket.on('connect', function(){
+    trace('init','socket connected','');
+    // 延迟 300ms，让 index.html 的 connect 处理先跑（show lobby / loadRooms）
+    setTimeout(doRejoin, 300);
+  });
 
   window.socket.on('hello',function(data){
     if(data&&data.user)myUid=data.user.uid;
@@ -390,6 +532,11 @@ function patchSocket(){
       window.log('[triple] '+data.username+' 合成了 '+data.name+'（攻'+data.attack+' 血'+data.hp+'）','ok');
     }
   });
+  window.socket.on('game:upgraded',function(data){
+    if(typeof window.log==='function'){
+      window.log('[upgrade] '+data.username+' 升级到酒馆 T'+data.newTier+'（花费 '+data.cost+' 金）','ok');
+    }
+  });
   window.socket.on('game:finished',function(data){
     gameOverLocked=true;
     showGameOver();
@@ -409,6 +556,7 @@ function loop(){
   inject();
   patchShow();
   patchSocket();
+  tryAutoConnect();
 }
 
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',loop);
@@ -433,6 +581,7 @@ window.doPlace=function(handIndex){ emitGame('game:place',{handIndex:handIndex})
 window.doRemove=function(boardIndex){ emitGame('game:remove',{boardIndex:boardIndex}); };
 window.doRefresh=function(){ emitGame('game:refresh'); };
 window.doFreeze=function(){ emitGame('game:freeze'); };
+window.doUpgrade=function(){ emitGame('game:upgrade'); };
 window.endTurn=function(){ emitGame('game:endTurn'); };
 window.doDebugTriple=function(){ emitGame('game:debug-triple'); };
 

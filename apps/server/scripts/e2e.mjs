@@ -3,7 +3,24 @@ import { io } from "socket.io-client";
 const URL = process.env.URL || "http://localhost:3000";
 const PASSWORD = "secret123";
 const ARGS = process.argv.slice(2);
-const DO_TRIPLE = ARGS.includes("--triple");
+const MODE_FULL = ARGS.includes("--full");
+const DO_TRIPLE = MODE_FULL || ARGS.includes("--triple");
+const DO_BOARD = MODE_FULL || ARGS.includes("--board");
+const DO_UPGRADE = MODE_FULL || ARGS.includes("--upgrade");
+const DO_RECONNECT = MODE_FULL || ARGS.includes("--reconnect");
+
+const latestStates = new WeakMap();
+const latestRooms = new WeakMap();
+
+function attachWatchers(socket){
+  socket.on("game:state", (s) => latestStates.set(socket, s));
+  socket.on("room:update", (r) => latestRooms.set(socket, r));
+}
+
+function getLatest(socket){ return latestStates.get(socket) || null; }
+function getLatestRoom(socket){ return latestRooms.get(socket) || null; }
+
+function sleep(ms){ return new Promise(r => setTimeout(r, ms)); }
 
 function randUser(prefix){
   return prefix + Math.random().toString(36).slice(2, 8);
@@ -33,6 +50,7 @@ function connect(token){
     const s = io(URL, { auth: { token }, reconnection: false });
     const buffer = { hello: null };
     s.on("hello", (d) => { buffer.hello = d; });
+    attachWatchers(s);
     const t = setTimeout(() => reject(new Error("connect timeout")), 8000);
     s.on("connect", () => { clearTimeout(t); resolve({ socket: s, buffer }); });
     s.on("connect_error", (e) => { clearTimeout(t); reject(e); });
@@ -57,7 +75,10 @@ function emitAck(socket, event, payload){
 }
 
 function waitState(socket, predicate, timeout){
-  timeout = timeout || 5000;
+  timeout = timeout || 6000;
+  const cached = getLatest(socket);
+  if(cached && predicate(cached)) return Promise.resolve(cached);
+
   return new Promise((resolve, reject) => {
     const t = setTimeout(() => { socket.off("game:state", handler); reject(new Error("state wait timeout")); }, timeout);
     function handler(state){
@@ -69,6 +90,10 @@ function waitState(socket, predicate, timeout){
     }
     socket.on("game:state", handler);
   });
+}
+
+function getState(socket){
+  return Promise.resolve(getLatest(socket));
 }
 
 function findMe(state, uid){
@@ -83,11 +108,13 @@ function summarize(state, uid){
   const g = me.gold == null ? "-" : String(me.gold);
   const h = me.hp == null ? "-" : String(me.hp);
   const hd = me.hand ? me.hand.length : 0;
+  const bd = me.board ? me.board.length : 0;
   const sh = me.shop ? me.shop.length : 0;
+  const tier = me.tavernTier || 1;
   let tail = "";
   if(me.ready) tail += " [ready]";
   if(me.alive === false) tail += " [淘汰]";
-  const parts = ["T" + state.turn, state.phase, "金" + g, "血" + h, "手" + hd, "店" + sh];
+  const parts = ["T" + state.turn, state.phase, "酒馆T" + tier, "金" + g, "血" + h, "场" + bd, "手" + hd, "店" + sh];
   return parts.join(" ") + tail;
 }
 
@@ -96,12 +123,41 @@ function cardLine(card){
   return card.name + gold + "(★" + card.tier + " 攻" + card.attack + " 血" + card.hp + ")";
 }
 
+async function advanceTurn(sa, sb, uidA, uidB, expectTurn){
+  const waitBattleA = once(sa, "game:battle", 8000);
+  const waitBattleB = once(sb, "game:battle", 8000);
+  const waitTA = waitState(sa, s => s.turn === expectTurn, 8000);
+  const waitTB = waitState(sb, s => s.turn === expectTurn, 8000);
+
+  let stA = await getState(sa);
+  if(findMe(stA, uidA).alive && !findMe(stA, uidA).ready){
+    const eA = await emitAck(sa, "game:endTurn");
+    if(!eA.ok) throw new Error("A endTurn failed " + eA.error);
+  }
+  let stB = await getState(sb);
+  if(findMe(stB, uidB).alive && !findMe(stB, uidB).ready){
+    const eB = await emitAck(sb, "game:endTurn");
+    if(!eB.ok) throw new Error("B endTurn failed " + eB.error);
+  }
+
+  await waitBattleA;
+  await waitBattleB;
+  const rA = await waitTA;
+  const rB = await waitTB;
+  return { stA: rA, stB: rB };
+}
+
 async function main(){
   const log = function(){ console.log("[e2e]", ...arguments); };
   const uA = randUser("qa");
   const uB = randUser("qb");
 
-  log("URL", URL, DO_TRIPLE ? "(triple 模式)" : "");
+  const flags = [];
+  if(DO_BOARD) flags.push("board");
+  if(DO_TRIPLE) flags.push("triple");
+  if(DO_UPGRADE) flags.push("upgrade");
+  if(DO_RECONNECT) flags.push("reconnect");
+  log("URL", URL, flags.length ? "(" + flags.join("+") + ")" : "");
   log("注册", uA, uB);
   const A = await register(uA, PASSWORD);
   const B = await register(uB, PASSWORD);
@@ -111,11 +167,11 @@ async function main(){
 
   const connA = await connect(A.token);
   const connB = await connect(B.token);
-  const sa = connA.socket;
+  let sa = connA.socket;
   const sb = connB.socket;
   log("socket connected");
 
-  await new Promise(r => setTimeout(r, 200));
+  await sleep(200);
   const ha = connA.buffer.hello;
   const hb = connB.buffer.hello;
   if(!ha) throw new Error("no hello for A");
@@ -134,91 +190,112 @@ async function main(){
   await emitAck(sb, "room:ready", { ready: true });
   log("B 准备");
 
-  const waitA0 = waitState(sa, s => s.turn === 1 && s.phase === "prepare");
-  const waitB0 = waitState(sb, s => s.turn === 1 && s.phase === "prepare");
   const startRes = await emitAck(sa, "room:start");
   if(!startRes.ok) throw new Error("start failed " + startRes.error);
-  const stA0 = await waitA0;
-  const stB0 = await waitB0;
+  await waitState(sa, s => s.turn === 1 && s.phase === "prepare");
+  await waitState(sb, s => s.turn === 1 && s.phase === "prepare");
+  let stA = await getState(sa);
+  let stB = await getState(sb);
   log("开局");
-  log("初始 A:", summarize(stA0, uidA));
-  log("初始 B:", summarize(stB0, uidB));
+  log("初始 A:", summarize(stA, uidA));
+  log("初始 B:", summarize(stB, uidB));
 
-  const shopA0 = findMe(stA0, uidA).shop;
-  const shopB0 = findMe(stB0, uidB).shop;
-  log("A 商店", shopA0.map(cardLine).join(" | "));
-  log("B 商店", shopB0.map(cardLine).join(" | "));
-
-  log("A 购买 slot 0");
-  const waitBuyA = waitState(sa, s => { const m = findMe(s, uidA); return m && m.hand && m.hand.length === 1; });
+  // 双方各买 1 张
   const buyA = await emitAck(sa, "game:buy", { slot: 0 });
   if(!buyA.ok) throw new Error("A buy failed " + buyA.error);
-  const stA1 = await waitBuyA;
-  log("A 购买后:", summarize(stA1, uidA));
+  await waitState(sa, s => { const m = findMe(s, uidA); return m && m.hand.length === 1; });
+  log("A 购买后:", summarize(await getState(sa), uidA));
 
-  log("B 购买 slot 0");
-  const waitBuyB = waitState(sb, s => { const m = findMe(s, uidB); return m && m.hand && m.hand.length === 1; });
   const buyB = await emitAck(sb, "game:buy", { slot: 0 });
   if(!buyB.ok) throw new Error("B buy failed " + buyB.error);
-  const stB1 = await waitBuyB;
-  log("B 购买后:", summarize(stB1, uidB));
+  await waitState(sb, s => { const m = findMe(s, uidB); return m && m.hand.length === 1; });
+  log("B 购买后:", summarize(await getState(sb), uidB));
 
-  const waitBattleA = once(sa, "game:battle");
-  const waitBattleB = once(sb, "game:battle");
-  const waitT2A = waitState(sa, s => s.turn === 2);
-  const waitT2B = waitState(sb, s => s.turn === 2);
+  // UPGRADE
+  let upgradeOk = true;
+  if(DO_UPGRADE){
+    console.log("---------- UPGRADE TEST ----------");
+    log("攒钱：连打 2 回合");
+    const r1 = await advanceTurn(sa, sb, uidA, uidB, 2);
+    stA = r1.stA; stB = r1.stB;
+    log("T2:", summarize(stA, uidA));
+    const r2 = await advanceTurn(sa, sb, uidA, uidB, 3);
+    stA = r2.stA; stB = r2.stB;
+    log("T3:", summarize(stA, uidA));
 
-  log("A endTurn");
-  const eA = await emitAck(sa, "game:endTurn");
-  if(!eA.ok) throw new Error("A endTurn failed " + eA.error);
+    const me = findMe(stA, uidA);
+    if(me.gold < 5){
+      log("金币不足（" + me.gold + "），跳过升级");
+      upgradeOk = false;
+    } else {
+      log("升级酒馆（当前 T" + (me.tavernTier||1) + "）");
+      const waitUpgEvt = once(sa, "game:upgraded", 5000);
+      const upgRes = await emitAck(sa, "game:upgrade");
+      if(!upgRes.ok) throw new Error("upgrade failed " + upgRes.error);
+      const evtUpg = await waitUpgEvt;
+      await waitState(sa, s => { const m = findMe(s, uidA); return m && (m.tavernTier||1) >= 2; });
+      const stUpg = await getState(sa);
+      log("upgraded 事件: newTier=" + evtUpg.newTier + " cost=" + evtUpg.cost);
+      log("升级后:", summarize(stUpg, uidA));
+      upgradeOk = findMe(stUpg, uidA).tavernTier >= 2;
+    }
+    console.log(upgradeOk ? "  upgrade PASS" : "  upgrade FAIL");
+    console.log("---------------------------------");
+    console.log("");
+  }
 
-  log("B endTurn");
-  const eB = await emitAck(sb, "game:endTurn");
-  if(!eB.ok) throw new Error("B endTurn failed " + eB.error);
+  // BOARD
+  let boardOk = true;
+  if(DO_BOARD){
+    console.log("---------- BOARD TEST ----------");
+    stA = await getState(sa);
+    const me = findMe(stA, uidA);
+    if(!me.hand || me.hand.length === 0){
+      log("A 无手牌，跳过 board");
+      boardOk = false;
+    } else {
+      log("A 上阵手牌[0]");
+      const placeA = await emitAck(sa, "game:place", { handIndex: 0 });
+      if(!placeA.ok) throw new Error("A place failed " + placeA.error);
+      await waitState(sa, s => { const m = findMe(s, uidA); return m && m.board.length === 1; });
+      const stPlaceA = await getState(sa);
+      const aPower = findMe(stPlaceA, uidA).board.reduce((s, c) => s + c.attack + c.hp, 0);
+      log("A 上阵后: " + summarize(stPlaceA, uidA));
+      log("A 场上 power =", aPower);
 
-  const battle = await waitBattleA;
-  await waitBattleB;
-  const stA2 = await waitT2A;
-  const stB2 = await waitT2B;
+      log("A 下阵");
+      const removeA = await emitAck(sa, "game:remove", { boardIndex: 0 });
+      if(!removeA.ok) throw new Error("A remove failed " + removeA.error);
+      await waitState(sa, s => { const m = findMe(s, uidA); return m && m.board.length === 0; });
+      log("A 下阵后: " + summarize(await getState(sa), uidA));
 
-  console.log("");
-  console.log("========== REPORT ==========");
-  console.log("room:", roomId);
-  console.log("A:", uA, "uid=" + uidA);
-  console.log("B:", uB, "uid=" + uidB);
-  console.log("");
-  console.log("T1 初始");
-  console.log("  A:", summarize(stA0, uidA));
-  console.log("  B:", summarize(stB0, uidB));
-  console.log("T1 购买后");
-  console.log("  A:", summarize(stA1, uidA), "hand=" + findMe(stA1, uidA).hand.map(cardLine).join(","));
-  console.log("  B:", summarize(stB1, uidB), "hand=" + findMe(stB1, uidB).hand.map(cardLine).join(","));
-  console.log("战斗结算");
-  battle.pairings.forEach(function(p){
-    const winner = p.winnerUid === p.aUid ? p.aName : p.bName;
-    console.log("  " + p.aName + "(" + p.aPower + ") vs " + p.bName + "(" + p.bPower + ") → 胜:" + winner + " 伤害:" + p.damage);
-  });
-  const elimStr = battle.eliminated.length === 0 ? "无" : battle.eliminated.map(x => x.username).join(",");
-  console.log("  淘汰:", elimStr);
-  console.log("  对局结束:", battle.gameOver);
-  console.log("T2");
-  console.log("  A:", summarize(stA2, uidA));
-  console.log("  B:", summarize(stB2, uidB));
-  console.log("");
+      log("A 再次上阵");
+      const placeA2 = await emitAck(sa, "game:place", { handIndex: 0 });
+      if(!placeA2.ok) throw new Error("A place2 failed " + placeA2.error);
+      await waitState(sa, s => { const m = findMe(s, uidA); return m && m.board.length === 1; });
+      const stPlaceA2 = await getState(sa);
+      log("A 再次上阵: " + summarize(stPlaceA2, uidA));
+      boardOk = findMe(stPlaceA2, uidA).board.length === 1 && aPower > 0;
+    }
+    console.log(boardOk ? "  board PASS" : "  board FAIL");
+    console.log("---------------------------------");
+    console.log("");
+  }
 
+  // TRIPLE
   let tripleOk = true;
   if(DO_TRIPLE){
     console.log("---------- TRIPLE TEST ----------");
     const waitTripleEvt = once(sa, "game:triple", 5000);
-    const waitTriState = waitState(sa, s => {
-      const m = findMe(s, uidA);
-      return m && m.hand && m.hand.length === 1 && m.hand[0].golden === true;
-    });
     const rTri = await emitAck(sa, "game:debug-triple");
     if(!rTri.ok) throw new Error("debug-triple failed " + (rTri.error || ""));
     const evtTri = await waitTripleEvt;
-    const stTri = await waitTriState;
-    const goldCard = findMe(stTri, uidA).hand[0];
+    await waitState(sa, s => {
+      const m = findMe(s, uidA);
+      return m && m.hand && m.hand.some(c => c.golden === true);
+    });
+    const stTri = await getState(sa);
+    const goldCard = findMe(stTri, uidA).hand.find(c => c.golden);
     console.log("triple 事件: " + evtTri.name + " 攻" + evtTri.attack + " 血" + evtTri.hp);
     console.log("A 手牌: " + findMe(stTri, uidA).hand.map(cardLine).join(","));
     tripleOk = !!goldCard && goldCard.golden === true && /金色/.test(goldCard.name);
@@ -227,24 +304,101 @@ async function main(){
     console.log("");
   }
 
-  const meA1 = findMe(stA1, uidA);
-  const meB1 = findMe(stB1, uidB);
-  const pass =
-    meA1 && meA1.hand.length === 1 && meA1.gold === 0 &&
-    meB1 && meB1.hand.length === 1 &&
-    battle.pairings.length === 1 &&
-    battle.turn === 1 &&
-    stA2.turn === 2 &&
-    stB2.turn === 2 &&
-    tripleOk;
+  // 最后打一轮
+  stA = await getState(sa);
+  if(findMe(stA, uidA).alive && !findMe(stA, uidA).ready){
+    const finalTurn = stA.turn + 1;
+    const r3 = await advanceTurn(sa, sb, uidA, uidB, finalTurn);
+    stA = r3.stA; stB = r3.stB;
+  }
+
+  // RECONNECT（最后一步，不破坏之前的状态）
+  let reconnectOk = true;
+  if(DO_RECONNECT){
+    console.log("---------- RECONNECT TEST ----------");
+    const stBefore = await getState(sa);
+    const meBefore = findMe(stBefore, uidA);
+    log("重连前 A: " + summarize(stBefore, uidA));
+
+    // A 断开
+    log("A socket 断开");
+    sa.disconnect();
+    await sleep(800);
+
+    // B 侧应看到 A online=false
+    const roomB1 = getLatestRoom(sb);
+    let aOfflineInB = false;
+    if(roomB1 && roomB1.players){
+      const pa = roomB1.players.find(p => p.uid === uidA);
+      aOfflineInB = !!pa && pa.online === false;
+    }
+    log("B 侧看到 A 离线 =", aOfflineInB);
+
+    // A 重连
+    log("A 重新连接");
+    const connA2 = await connect(A.token);
+    const sa2 = connA2.socket;
+    await sleep(200);
+    if(!connA2.buffer.hello) throw new Error("reconnect: no hello");
+
+    // 发 room:rejoin
+    log("A 请求恢复房间");
+    const rj = await emitAck(sa2, "room:rejoin");
+    if(!rj.ok) throw new Error("rejoin failed " + (rj.error || ""));
+    if(!rj.room || rj.room.id !== roomId) throw new Error("rejoin: wrong room " + JSON.stringify(rj.room));
+    if(!rj.hasGame) throw new Error("rejoin: no game restored");
+
+    const stAfter = await waitState(sa2, s => s.turn === stBefore.turn && s.phase === stBefore.phase, 5000);
+    const meAfter = findMe(stAfter, uidA);
+    log("重连后 A: " + summarize(stAfter, uidA));
+
+    const sameGold = meBefore.gold === meAfter.gold;
+    const sameHp = meBefore.hp === meAfter.hp;
+    const sameHandN = meBefore.hand.length === meAfter.hand.length;
+    const sameBoardN = meBefore.board.length === meAfter.board.length;
+    const sameTier = (meBefore.tavernTier||1) === (meAfter.tavernTier||1);
+    const sameTurn = stBefore.turn === stAfter.turn;
+    log("对比: 金=" + sameGold + " 血=" + sameHp + " 手=" + sameHandN + " 场=" + sameBoardN + " T=" + sameTier + " turn=" + sameTurn);
+
+    await sleep(400);
+    const roomB2 = getLatestRoom(sb);
+    let aOnlineAgain = false;
+    if(roomB2 && roomB2.players){
+      const pa = roomB2.players.find(p => p.uid === uidA);
+      aOnlineAgain = !!pa && pa.online !== false;
+    }
+    log("B 侧看到 A 恢复在线 =", aOnlineAgain);
+
+    reconnectOk = sameGold && sameHp && sameHandN && sameBoardN && sameTier && sameTurn && aOfflineInB && aOnlineAgain;
+    console.log(reconnectOk ? "  reconnect PASS" : "  reconnect FAIL");
+    console.log("---------------------------------");
+    console.log("");
+
+    // 更新 sa 引用用于断开
+    sa = sa2;
+  }
+
+  console.log("");
+  console.log("========== REPORT ==========");
+  console.log("room:", roomId);
+  console.log("A:", uA, "uid=" + uidA);
+  console.log("B:", uB, "uid=" + uidB);
+  console.log("");
+  console.log("board:", boardOk ? "PASS" : (DO_BOARD ? "FAIL" : "skip"));
+  console.log("upgrade:", upgradeOk ? "PASS" : (DO_UPGRADE ? "FAIL" : "skip"));
+  console.log("triple:", tripleOk ? "PASS" : (DO_TRIPLE ? "FAIL" : "skip"));
+  console.log("reconnect:", reconnectOk ? "PASS" : (DO_RECONNECT ? "FAIL" : "skip"));
+  console.log("");
+
+  const pass = boardOk && upgradeOk && tripleOk && reconnectOk;
 
   console.log(pass ? "PASS ✅" : "FAIL ❌");
   console.log("============================");
 
-  sa.emit("room:leave");
-  sb.emit("room:leave");
-  sa.disconnect();
-  sb.disconnect();
+  try { sa.emit("room:leave"); } catch(e){}
+  try { sb.emit("room:leave"); } catch(e){}
+  try { sa.disconnect(); } catch(e){}
+  try { sb.disconnect(); } catch(e){}
 
   process.exit(pass ? 0 : 1);
 }

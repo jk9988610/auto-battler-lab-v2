@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""auto-battler devtool (Tkinter)"""
+"""工作台"""
 
 import os
 import re
@@ -16,12 +16,14 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 os.environ.setdefault("PYTHONIOENCODING", "utf-8")
 os.environ.setdefault("PYTHONUTF8", "1")
 os.environ.setdefault("PYTHONLEGACYWINDOWSSTDIO", "0")
+
 GAME_PORT = 3000
 FONT_MONO = ("Consolas", 10)
 
 DEPLOY_HOST = "8.133.252.224"
 DEPLOY_USER = "root"
 DEPLOY_REMOTE = "/var/www/auto-battler-lab"
+ONLINE_URL = "https://ab.bykc.click"
 
 _START = "<" * 3 + "FILE:"
 _END = "FILE" + ">" * 3
@@ -61,6 +63,74 @@ def normalize_eol(content, eol):
     return content
 
 
+class ButtonFlow(tk.Frame):
+    def __init__(self, parent, specs, bg="#0d0d0f"):
+        super().__init__(parent, bg=bg)
+        self.specs = specs
+        self._last_width = 0
+        self.bind("<Configure>", self._on_resize)
+        self.after(80, self._relayout)
+
+    def _on_resize(self, event):
+        if abs(event.width - self._last_width) < 12:
+            return
+        self._last_width = event.width
+        self.after_idle(self._relayout)
+
+    def _make_btn(self, parent, spec):
+        b = tk.Button(
+            parent,
+            text=spec["text"],
+            command=spec["cmd"],
+            bg=spec.get("bg", "#1c1c20"),
+            fg=spec.get("fg", "#e6e6e6"),
+            activebackground="#2a2a30",
+            activeforeground="#fff",
+            relief="flat",
+            padx=10, pady=4,
+            cursor="hand2",
+        )
+        if spec.get("font"):
+            b.configure(font=spec["font"])
+        return b
+
+    def _relayout(self):
+        for w in self.winfo_children():
+            w.destroy()
+
+        max_w = self.winfo_width()
+        if max_w < 300:
+            max_w = 1200
+
+        widths = []
+        for spec in self.specs:
+            b = self._make_btn(self, spec)
+            b.update_idletasks()
+            widths.append(b.winfo_reqwidth() + 8)
+            b.destroy()
+
+        rows = []
+        row = []
+        row_w = 0
+        for i, w in enumerate(widths):
+            if row and row_w + w > max_w:
+                rows.append(row)
+                row = []
+                row_w = 0
+            row.append(i)
+            row_w += w
+        if row:
+            rows.append(row)
+
+        for row_idxs in rows:
+            f = tk.Frame(self, bg=self.cget("bg"))
+            f.pack(fill=tk.X, pady=1)
+            for i in row_idxs:
+                spec = self.specs[i]
+                b = self._make_btn(f, spec)
+                b.pack(side=tk.LEFT, padx=2)
+
+
 class App:
     def __init__(self, root):
         self.root = root
@@ -69,41 +139,36 @@ class App:
 
         root.title("工作台")
         root.geometry("1100x820")
+        root.minsize(420, 500)
         root.configure(bg="#0d0d0f")
 
-        bar_row1 = tk.Frame(root, bg="#0d0d0f")
-        bar_row1.pack(fill=tk.X, padx=8, pady=(6, 2))
-        bar_row2 = tk.Frame(root, bg="#0d0d0f")
-        bar_row2.pack(fill=tk.X, padx=8, pady=(2, 6))
+        top = tk.Frame(root, bg="#0d0d0f")
+        top.pack(fill=tk.X, padx=8, pady=(6, 2))
+        tk.Label(top, text="工作台", fg="#c8a15a", bg="#0d0d0f",
+                 font=("Microsoft YaHei UI", 11, "bold")).pack(side=tk.LEFT)
+        self.status_label = tk.Label(top, text="服务器: 未知", fg="#888", bg="#0d0d0f")
+        self.status_label.pack(side=tk.RIGHT)
 
-        def btn(parent, text, cmd, bg="#1c1c20", fg="#e6e6e6", font=None):
-            b = tk.Button(parent, text=text, command=cmd, bg=bg, fg=fg,
-                          activebackground="#2a2a30", activeforeground="#fff",
-                          relief="flat", padx=10, pady=4, cursor="hand2")
-            if font:
-                b.configure(font=font)
-            b.pack(side=tk.LEFT, padx=2)
-            return b
-
-        btn(bar_row1, "启动服务器", self.start_server, bg="#2d5a2d", fg="#d6ffd6")
-        btn(bar_row1, "停止", self.stop_server, bg="#5a2d2d", fg="#ffd6d6")
-        btn(bar_row1, "重启", self.restart_server)
-        btn(bar_row1, "typecheck", lambda: self.run_short("npm --prefix apps/server run typecheck", "typecheck"))
-        btn(bar_row1, "跑 e2e", lambda: self.run_short("node apps/server/scripts/e2e.mjs", "e2e"))
-        btn(bar_row1, "一键三连", lambda: self.run_short("node apps/server/scripts/e2e.mjs --triple", "triple"))
-
-        btn(bar_row2, "🌐 线上 e2e", lambda: self.run_short("set URL=https://ab.bykc.click&& node apps/server/scripts/e2e.mjs", "online"), bg="#3d5a5a", fg="#a6e0e0")
-        btn(bar_row2, "🌐 线上三连", lambda: self.run_short("set URL=https://ab.bykc.click&& node apps/server/scripts/e2e.mjs --triple", "online"), bg="#3d5a5a", fg="#a6e0e0")
-        btn(bar_row2, "💾 git 提交", self.git_commit, bg="#2d4d5a", fg="#a6d8ff")
-        btn(bar_row2, "🚀 部署到线上", self.deploy_online, bg="#5a3d2d", fg="#ffd6a6")
-        btn(bar_row2, "清日志", self.clear_logs)
-        btn(bar_row2, "复制日志", self.copy_logs)
-
-        self.status_label = tk.Label(bar_row2, text="服务器: 未知", fg="#888", bg="#0d0d0f")
-        self.status_label.pack(side=tk.RIGHT, padx=8)
+        specs = [
+            {"text": "启动服务器", "cmd": self.start_server, "bg": "#2d5a2d", "fg": "#d6ffd6"},
+            {"text": "停止", "cmd": self.stop_server, "bg": "#5a2d2d", "fg": "#ffd6d6"},
+            {"text": "重启", "cmd": self.restart_server},
+            {"text": "typecheck", "cmd": lambda: self.run_short("npm --prefix apps/server run typecheck", "typecheck")},
+            {"text": "跑 e2e", "cmd": lambda: self.run_short("node apps/server/scripts/e2e.mjs", "e2e")},
+            {"text": "一键三连", "cmd": lambda: self.run_short("node apps/server/scripts/e2e.mjs --triple", "triple")},
+            {"text": "\U0001F310 线上 e2e", "cmd": lambda: self.run_short("set URL=" + ONLINE_URL + "&& node apps/server/scripts/e2e.mjs", "online"), "bg": "#3d5a5a", "fg": "#a6e0e0"},
+            {"text": "🌐 线上全测", "cmd": lambda: self.run_short("set URL=" + ONLINE_URL + "&& node apps/server/scripts/e2e.mjs --full", "online"), "bg": "#3d5a5a", "fg": "#a6e0e0"},
+            {"text": "本地全测", "cmd": lambda: self.run_short("node apps/server/scripts/e2e.mjs --full", "full"), "bg": "#3d5a5a", "fg": "#a6e0e0"},
+            {"text": "\U0001F4BE git 提交", "cmd": self.git_commit, "bg": "#2d4d5a", "fg": "#a6d8ff"},
+            {"text": "\U0001F680 部署到线上", "cmd": self.deploy_online, "bg": "#5a3d2d", "fg": "#ffd6a6"},
+            {"text": "清日志", "cmd": self.clear_logs},
+            {"text": "复制日志", "cmd": self.copy_logs},
+        ]
+        self.btn_flow = ButtonFlow(root, specs, bg="#0d0d0f")
+        self.btn_flow.pack(fill=tk.X, padx=8, pady=(2, 6))
 
         tk.Label(root, text="指令区（可手动粘贴，或点下方「📋 从剪贴板运行」自动填入并执行）：",
-                 anchor="w", fg="#c8a15a", bg="#0d0d0f").pack(fill=tk.X, padx=8, pady=(6, 0))
+                 anchor="w", fg="#c8a15a", bg="#0d0d0f").pack(fill=tk.X, padx=8, pady=(4, 0))
 
         self.input_box = scrolledtext.ScrolledText(
             root, height=10, font=FONT_MONO,
@@ -111,42 +176,45 @@ class App:
             relief="flat", highlightthickness=1, highlightbackground="#1e1e22")
         self.input_box.pack(fill=tk.BOTH, expand=False, padx=8, pady=4)
 
-        btns = tk.Frame(root, bg="#0d0d0f")
-        btns.pack(fill=tk.X, padx=8)
+        actions = tk.Frame(root, bg="#0d0d0f")
+        actions.pack(fill=tk.X, padx=8)
 
-        run_btn = tk.Button(btns, text="▶ 智能运行", command=self.smart_run,
+        run_btn = tk.Button(actions, text="▶ 运行脚本", command=self.smart_run,
                             bg="#3d7d3d", fg="#fff", activebackground="#4d8d4d",
                             relief="flat", padx=16, pady=6, cursor="hand2",
-                            font=("Segoe UI", 11, "bold"))
+                            font=("Microsoft YaHei UI", 11, "bold"))
         run_btn.pack(side=tk.LEFT, padx=2, pady=4)
 
-        paste_btn = tk.Button(btns, text="📋 从剪贴板运行", command=self.run_from_clipboard,
+        paste_btn = tk.Button(actions, text="📋 从剪贴板运行", command=self.run_from_clipboard,
                               bg="#3d5d7d", fg="#fff", activebackground="#4d6d8d",
                               relief="flat", padx=16, pady=6, cursor="hand2",
-                              font=("Segoe UI", 11, "bold"))
+                              font=("Microsoft YaHei UI", 11, "bold"))
         paste_btn.pack(side=tk.LEFT, padx=2, pady=4)
 
+        actions2 = tk.Frame(root, bg="#0d0d0f")
+        actions2.pack(fill=tk.X, padx=8)
+
         self.auto_copy = tk.BooleanVar(value=True)
-        tk.Checkbutton(btns, text="执行后自动复制输出到剪贴板",
+        tk.Checkbutton(actions2, text="执行后自动复制输出到剪贴板",
                        variable=self.auto_copy, bg="#0d0d0f", fg="#aaa",
                        activebackground="#0d0d0f", selectcolor="#1c1c20",
-                       highlightthickness=0).pack(side=tk.LEFT, padx=10)
+                       highlightthickness=0).pack(side=tk.LEFT, pady=2)
 
-        self.apply_msg = tk.Label(btns, text="", fg="#8cf", bg="#0d0d0f")
+        self.apply_msg = tk.Label(actions2, text="", fg="#8cf", bg="#0d0d0f")
         self.apply_msg.pack(side=tk.LEFT, padx=8)
 
         tk.Label(root, text="输出：", anchor="w", fg="#c8a15a", bg="#0d0d0f").pack(
             fill=tk.X, padx=8, pady=(6, 0))
 
         self.output_box = scrolledtext.ScrolledText(
-            root, height=22, font=FONT_MONO,
+            root, height=20, font=FONT_MONO,
             bg="#050507", fg="#7fd67f", insertbackground="#7fd67f",
             relief="flat", highlightthickness=1, highlightbackground="#1e1e22")
         self.output_box.pack(fill=tk.BOTH, expand=True, padx=8, pady=4)
 
         self._poll_logs()
-        self.root.after(200, self.start_server)
-        self.root.after(600, self.load_clipboard_to_input)
+        self.root.after(300, self.start_server)
+        self.root.after(700, self.load_clipboard_to_input)
 
     def _poll_logs(self):
         try:
@@ -155,16 +223,15 @@ class App:
                 tag = None
                 if line.startswith("[err]") or "FAIL" in line or "ERROR" in line or "code=-" in line:
                     tag = "err"
-                elif line.startswith("[apply]") or line.startswith("[read]") or line.startswith("[deploy]"):
+                elif line.startswith("[apply]") or line.startswith("[read]") or line.startswith("[deploy]") or line.startswith("[git]"):
                     tag = "apply"
-                elif "PASS" in line or "listening" in line or "code=0" in line or "✅" in line:
+                elif "PASS" in line or "listening" in line or "code=0" in line or "\u2705" in line:
                     tag = "ok"
                 elif line.startswith("[dev]"):
                     tag = "dev"
                 self.output_box.insert(tk.END, line + "\n", tag)
         except queue.Empty:
             pass
-
         self.output_box.tag_config("err", foreground="#e88")
         self.output_box.tag_config("ok", foreground="#7fd67f")
         self.output_box.tag_config("dev", foreground="#666")
@@ -284,56 +351,27 @@ class App:
                 self.root.after(150, self.copy_logs)
         threading.Thread(target=worker, daemon=True).start()
 
-
-    def git_commit(self):
-        threading.Thread(target=self._git_commit_worker, daemon=True).start()
-
-    def _git_commit_worker(self):
-        import datetime
-        msg = "chore: auto commit " + datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-        def run_step(cmdline):
-            log_queue.put("[git] $ " + cmdline)
-            try:
-                proc = subprocess.Popen(
-                    "chcp 65001 >nul && " + cmdline, cwd=ROOT, shell=True,
-                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                    text=True, encoding="utf-8", errors="replace", bufsize=1)
-            except Exception as e:
-                log_queue.put("[err] " + str(e))
-                return -1
-            for line in proc.stdout:
-                log_queue.put("[git] " + line.rstrip())
-            proc.wait()
-            return proc.returncode
-
-        try:
-            if run_step("git add -A") != 0:
-                log_queue.put("[git] add 失败")
-                return
-            run_step("git status --short")
-            rc = run_step('git commit -m "' + msg + '"')
-            if rc != 0:
-                log_queue.put("[git] commit 返回 " + str(rc) + "（可能无变更）")
-            run_step("git log --oneline -5")
-            log_queue.put("[git] OK")
-            if self.auto_copy.get():
-                self.root.after(200, self.copy_logs)
-        except Exception as e:
-            log_queue.put("[err] git: " + str(e))
-
     def deploy_online(self):
-        if self.apply_msg.cget("text").startswith("部署中"):
+        if getattr(self, "_deploying", False):
+            log_queue.put("[deploy] 已有部署在跑，忽略本次点击")
             return
+        self._deploying = True
         self.apply_msg.config(text="部署中...")
         threading.Thread(target=self._deploy_worker, daemon=True).start()
+        self.root.after(120000, self._unlock_deploy)
+
+    def _unlock_deploy(self):
+        if getattr(self, "_deploying", False):
+            self._deploying = False
+            self.apply_msg.config(text="")
+            log_queue.put("[deploy] 超时自动解锁")
 
     def _deploy_worker(self):
         def run_capture(cmdline, tag):
             log_queue.put("[deploy] $ " + cmdline)
             try:
                 proc = subprocess.Popen(
-                    cmdline, cwd=ROOT, shell=True,
+                    "chcp 65001 >nul && " + cmdline, cwd=ROOT, shell=True,
                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                     text=True, encoding="utf-8", errors="replace", bufsize=1)
             except Exception as e:
@@ -392,15 +430,56 @@ class App:
                 return
 
             log_queue.put("")
-            log_queue.put("[deploy] ✅ 完成 https://ab.bykc.click/")
+            log_queue.put("[deploy] \u2705 完成 " + ONLINE_URL + "/")
 
             def done():
+                self._deploying = False
                 self.apply_msg.config(text="部署完成")
+                self.root.after(3000, lambda: self.apply_msg.config(text=""))
                 if self.auto_copy.get():
                     self.copy_logs()
             self.root.after(100, done)
         except Exception as e:
+            self._deploying = False
+            self.root.after(0, lambda: self.apply_msg.config(text="部署失败"))
             log_queue.put("[err] deploy: " + str(e))
+
+    def git_commit(self):
+        threading.Thread(target=self._git_commit_worker, daemon=True).start()
+
+    def _git_commit_worker(self):
+        import datetime
+        msg = "chore: auto commit " + datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        def run_step(cmdline):
+            log_queue.put("[git] $ " + cmdline)
+            try:
+                proc = subprocess.Popen(
+                    "chcp 65001 >nul && " + cmdline, cwd=ROOT, shell=True,
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    text=True, encoding="utf-8", errors="replace", bufsize=1)
+            except Exception as e:
+                log_queue.put("[err] " + str(e))
+                return -1
+            for line in proc.stdout:
+                log_queue.put("[git] " + line.rstrip())
+            proc.wait()
+            return proc.returncode
+
+        try:
+            if run_step("git add -A") != 0:
+                log_queue.put("[git] add 失败")
+                return
+            run_step("git status --short")
+            rc = run_step('git commit -m "' + msg + '"')
+            if rc != 0:
+                log_queue.put("[git] commit 返回 " + str(rc) + "（可能无变更）")
+            run_step("git log --oneline -5")
+            log_queue.put("[git] OK")
+            if self.auto_copy.get():
+                self.root.after(200, self.copy_logs)
+        except Exception as e:
+            log_queue.put("[err] git: " + str(e))
 
     def smart_run(self):
         text = self.input_box.get("1.0", tk.END)
@@ -412,6 +491,36 @@ class App:
 
     def _smart_run_worker(self, text):
         try:
+            # ---- 优先识别：脚本名（宽松版） ----
+            lines = [l.strip() for l in text.splitlines() if l.strip()]
+            script_name = None
+            if len(lines) == 1:
+                cand = lines[0]
+                if cand.startswith("python "):
+                    cand = cand[7:].strip()
+                if cand.endswith(".py") and " " not in cand:
+                    # 如果没写路径，优先 tools/ 下的同名文件
+                    if "/" not in cand and "\\" not in cand:
+                        cand2 = "tools/" + cand
+                        if os.path.exists(os.path.join(ROOT, cand2)):
+                            cand = cand2
+                    script_name = cand
+            if script_name:
+                log_queue.put("[run] python " + script_name)
+                proc = subprocess.Popen(
+                    "chcp 65001 >nul && python " + script_name,
+                    cwd=ROOT, shell=True,
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    text=True, encoding="utf-8", errors="replace", bufsize=1)
+                for line in proc.stdout:
+                    log_queue.put("[run] " + line.rstrip())
+                proc.wait()
+                log_queue.put("[run] 结束 code=" + str(proc.returncode))
+                self.root.after(0, lambda: self.input_box.delete("1.0", tk.END))
+                if self.auto_copy.get():
+                    self.root.after(300, self.copy_logs)
+                return
+
             heredocs = HEREDOC_RE.findall(text)
             if heredocs:
                 results = []
@@ -451,7 +560,7 @@ class App:
                     return
 
             log_queue.put("[shell] 执行 " + str(len(stripped.splitlines())) + " 行")
-            proc = subprocess.Popen(stripped, cwd=ROOT, shell=True,
+            proc = subprocess.Popen("chcp 65001 >nul && " + stripped, cwd=ROOT, shell=True,
                                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                     text=True, encoding="utf-8", errors="replace", bufsize=1)
             for line in proc.stdout:
@@ -506,7 +615,7 @@ class App:
                 elif kind == "shell":
                     cmd = op.get("cmd", "")
                     log_queue.put("[shell] $ " + cmd)
-                    proc = subprocess.Popen(cmd, cwd=ROOT, shell=True,
+                    proc = subprocess.Popen("chcp 65001 >nul && " + cmd, cwd=ROOT, shell=True,
                                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                             text=True, encoding="utf-8", errors="replace")
                     out, _ = proc.communicate()
