@@ -1,0 +1,18 @@
+body { font-family: system-ui, sans-serif; max-width: 760px; margin: 40px auto; padding: 0 16px; }
+h1 { font-size: 20px; }
+fieldset { margin: 16px 0; padding: 12px; border: 1px solid #ccc; border-radius: 8px; }
+input, button { font-size: 14px; padding: 6px 10px; margin: 4px 4px 4px 0; }
+#log { background: #111; color: #0f0; padding: 10px; border-radius: 6px; min-height: 100px;
+       white-space: pre-wrap; font-family: Consolas, monospace; font-size: 13px; }
+.ok { color: #090; }
+.err { color: #c00; }
+.hidden { display: none; }
+.room-item { border: 1px solid #ddd; padding: 8px; margin: 4px 0; border-radius: 6px;
+             display: flex; justify-content: space-between; align-items: center; }
+.seats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 12px 0; }
+.seat { border: 1px solid #ccc; border-radius: 6px; padding: 8px; min-height: 60px; background: #fafafa; }
+.seat.me { border-color: #090; background: #eefbe9; }
+.seat.host { border-color: #f80; }
+.seat.empty { color: #aaa; display: flex; align-items: center; justify-content: center; }
+.tag { font-size: 12px; padding: 1px 6px; border-radius: 4px; background: #eee; margin-left: 4px; }
+.tag.ready { background: #cfc; color: #060; }

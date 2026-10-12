@@ -1,0 +1,39 @@
+
+<!doctype html><html lang="zh"> <head> <meta charset="utf-8" /> <meta name="viewport" content="width=device-width,initial-scale=1" /> <title>auto-battler-lab</title> <style> body { font-family: system-ui, sans-serif; max-width: 640px; margin: 40px auto; padding: 0 16px; } h1 { font-size: 20px; } fieldset { margin: 16px 0; padding: 12px; border: 1px solid #ccc; border-radius: 8px; } input, button { font-size: 14px; padding: 6px 10px; margin: 4px 4px 4px 0; } #log { background: #111; color: #0f0; padding: 10px; border-radius: 6px; min-height: 120px; white-space: pre-wrap; font-family: Consolas, monospace; font-size: 13px; } .ok { color: #090; } .err { color: #c00; } </style> </head> <body> <h1>auto-battler-lab（学习版）</h1><fieldset> <legend>账号</legend> <input id="u" placeholder="用户名 3-24" /> <input id="p" type="password" placeholder="密码 >=6" /> <button onclick="doRegister()">注册</button> <button onclick="doLogin()">登录</button> <button onclick="doMe()">查我</button> </fieldset><fieldset> <legend>Socket</legend> <button onclick="doConnect()">连接</button> <button onclick="doPing()">ping</button> <button onclick="doDisconnect()">断开</button> </fieldset><div id="log"></div><script src="/socket.io/socket.io.js"></script><script> var token = localStorage.getItem("token") || ""; var socket = null; function log(s, cls) { var el = document.getElementById("log"); var line = document.createElement("div"); if (cls) line.className = cls; line.textContent = s; el.appendChild(line); el.scrollTop = el.scrollHeight; } function api(path, body) { return fetch("/api" + path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) }).then(function (r) { return r.json().then(function (j) { return { status: r.status, body: j }; }); }); } function doRegister() { var u = document.getElementById("u").value; var p = document.getElementById("p").value; api("/auth/register", { username: u, password: p }).then(function (r) { if (r.status === 200) { token = r.body.token; localStorage.setItem("token", token); log("注册成功: " + r.body.user.username, "ok"); } else { log("注册失败 " + r.status + ": " + JSON.stringify(r.body), "err"); } }); } function doLogin() { var u = document.getElementById("u").value; var p = document.getElementById("p").value; api("/auth/login", { username: u, password: p }).then(function (r) { if (r.status === 200) { token = r.body.token; localStorage.setItem("token", token); log("登录成功: " + r.body.user.username, "ok"); } else { log("登录失败 " + r.status + ": " + JSON.stringify(r.body), "err"); } }); } function doMe() { fetch("/api/me", { headers: { "Authorization": "Bearer " + token } }) .then(function (r) { return r.json(); }) .then(function (j) { log("me: " + JSON.stringify(j)); }); } function doConnect() { if (socket) { log("已连接"); return; } socket = io({ auth: { token: token } }); socket.on("connect", function () { log("socket 已连接 id=" + socket.id, "ok"); }); socket.on("hello", function (data) { log("hello: " + JSON.stringify(data), "ok"); }); socket.on("connect_error", function (e) { log("socket 错误: " + e.message, "err"); }); socket.on("disconnect", function (r) { log("socket 断开: " + r); socket = null; }); } function doPing() { if (!socket) { log("未连接", "err"); return; } socket.emit("ping", function (r) { log("pong: " + JSON.stringify(r)); }); } function doDisconnect() { if (socket) { socket.disconnect(); socket = null; } } </script></body> </html> FILE>>>
+第 2 步：改 main.ts，让服务器托管 public
+粘贴：
+
+<<<FILE: apps/server/src/main.ts eol=lf
+import path from "node:path";
+import fs from "node:fs";
+import http from "node:http";
+import express from "express";
+import cors from "cors";
+import { env } from "./env";
+import "./db";
+import { authRouter, authMiddleware } from "./auth";
+import { attachSocket } from "./socket";
+
+const app = express();
+app.use(cors({ origin: env.clientOrigin, credentials: true }));
+app.use(express.json());
+
+app.get("/health", function (_req, res) {
+res.json({ ok: true, t: Date.now() });
+});
+
+app.use("/api/auth", authRouter);
+app.get("/api/me", authMiddleware, function (req, res) {
+res.json({ user: (req as any).user });
+});
+
+const publicDir = path.resolve(__dirname, "../public");
+app.use(express.static(publicDir));
+console.log("[server] static dir: " + publicDir);
+
+const server = http.createServer(app);
+attachSocket(server);
+
+server.listen(env.port, function () {
+console.log("[server] listening on port " + env.port);
+});

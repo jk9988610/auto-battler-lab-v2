@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>auto-battler-lab</title>
+<link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+<h1>auto-battler-lab（学习版）</h1>
+
+<div id="view-auth">
+  <fieldset><legend>账号</legend>
+    <input id="u" placeholder="用户名 3-24" />
+    <input id="p" type="password" placeholder="密码 6 位以上" />
+    <button onclick="doRegister()">注册</button>
+    <button onclick="doLogin()">登录</button>
+    <button onclick="doMe()">查我</button>
+    <button onclick="doConnect()">连接</button>
+  </fieldset>
+</div>
+
+<div id="view-lobby" class="hidden">
+  <fieldset><legend>大厅</legend>
+    <button onclick="loadRooms()">刷新列表</button>
+    <input id="roomName" placeholder="房间名 可留空" />
+    <button onclick="doCreateRoom()">创建房间</button>
+  </fieldset>
+  <div id="roomList"></div>
+</div>
+
+<div id="view-room" class="hidden">
+  <fieldset><legend>房间</legend>
+    <div id="roomTitle"></div>
+    <div id="seats" class="seats"></div>
+    <button id="btnReady" onclick="toggleReady()">准备</button>
+    <button id="btnStart" onclick="doStart()">开始游戏</button>
+    <button onclick="doLeave()">离开房间</button>
+  </fieldset>
+</div>
+
+<div id="log"></div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>

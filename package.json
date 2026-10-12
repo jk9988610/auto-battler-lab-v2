@@ -1,0 +1,11 @@
+{
+"name": "auto-battler-lab",
+"private": true,
+"version": "0.0.1",
+"scripts": {
+"dev": "pnpm -r --parallel dev",
+"build": "pnpm -r build",
+"start": "pnpm --filter server start",
+"typecheck": "pnpm -r typecheck"
+}
+}
