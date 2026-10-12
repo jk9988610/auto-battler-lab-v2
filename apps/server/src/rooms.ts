@@ -170,3 +170,13 @@ const room = rooms.get(roomId);
 if (!room) return [];
 return room.players.map(function (p) { return p.socketId; });
 }
+
+export function resetRoomForNewGame(roomId: string): Room | null {
+const room = rooms.get(roomId);
+if (!room) return null;
+room.status = "waiting";
+room.players.forEach(function (p) {
+p.ready = p.isHost;
+});
+return room;
+}

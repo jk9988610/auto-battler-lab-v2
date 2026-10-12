@@ -7,3 +7,12 @@ data/
 *.log
 .DS_Store
 .pnpm-store/
+
+# auto-added
+*.tgz
+*.zip
+ab-deploy.tgz
+apps/server/data/
+apps/server/scripts/hello*.txt
+apps/server/scripts/test*.txt
+tools/patch-*.py
