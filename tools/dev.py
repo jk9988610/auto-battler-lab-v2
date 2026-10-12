@@ -67,15 +67,17 @@ class App:
         self.server_proc = None
         self.server_lock = threading.Lock()
 
-        root.title("酒馆实验室 · 开发控制台")
+        root.title("工作台")
         root.geometry("1100x820")
         root.configure(bg="#0d0d0f")
 
-        bar = tk.Frame(root, bg="#0d0d0f")
-        bar.pack(fill=tk.X, padx=8, pady=6)
+        bar_row1 = tk.Frame(root, bg="#0d0d0f")
+        bar_row1.pack(fill=tk.X, padx=8, pady=(6, 2))
+        bar_row2 = tk.Frame(root, bg="#0d0d0f")
+        bar_row2.pack(fill=tk.X, padx=8, pady=(2, 6))
 
-        def btn(text, cmd, bg="#1c1c20", fg="#e6e6e6", font=None):
-            b = tk.Button(bar, text=text, command=cmd, bg=bg, fg=fg,
+        def btn(parent, text, cmd, bg="#1c1c20", fg="#e6e6e6", font=None):
+            b = tk.Button(parent, text=text, command=cmd, bg=bg, fg=fg,
                           activebackground="#2a2a30", activeforeground="#fff",
                           relief="flat", padx=10, pady=4, cursor="hand2")
             if font:
@@ -83,19 +85,21 @@ class App:
             b.pack(side=tk.LEFT, padx=2)
             return b
 
-        btn("启动服务器", self.start_server, bg="#2d5a2d", fg="#d6ffd6")
-        btn("停止", self.stop_server, bg="#5a2d2d", fg="#ffd6d6")
-        btn("重启", self.restart_server)
-        btn("typecheck", lambda: self.run_short("npm --prefix apps/server run typecheck", "typecheck"))
-        btn("跑 e2e", lambda: self.run_short("node apps/server/scripts/e2e.mjs", "e2e"))
-        btn("一键三连", lambda: self.run_short("node apps/server/scripts/e2e.mjs --triple", "triple"))
-        btn("🌐 线上 e2e", lambda: self.run_short("set URL=https://ab.bykc.click&& node apps/server/scripts/e2e.mjs", "online"), bg="#3d5a5a", fg="#a6e0e0")
-        btn("🌐 线上三连", lambda: self.run_short("set URL=https://ab.bykc.click&& node apps/server/scripts/e2e.mjs --triple", "online"), bg="#3d5a5a", fg="#a6e0e0")
-        btn("🚀 部署到线上", self.deploy_online, bg="#5a3d2d", fg="#ffd6a6")
-        btn("清日志", self.clear_logs)
-        btn("复制日志", self.copy_logs)
+        btn(bar_row1, "启动服务器", self.start_server, bg="#2d5a2d", fg="#d6ffd6")
+        btn(bar_row1, "停止", self.stop_server, bg="#5a2d2d", fg="#ffd6d6")
+        btn(bar_row1, "重启", self.restart_server)
+        btn(bar_row1, "typecheck", lambda: self.run_short("npm --prefix apps/server run typecheck", "typecheck"))
+        btn(bar_row1, "跑 e2e", lambda: self.run_short("node apps/server/scripts/e2e.mjs", "e2e"))
+        btn(bar_row1, "一键三连", lambda: self.run_short("node apps/server/scripts/e2e.mjs --triple", "triple"))
 
-        self.status_label = tk.Label(bar, text="服务器: 未知", fg="#888", bg="#0d0d0f")
+        btn(bar_row2, "🌐 线上 e2e", lambda: self.run_short("set URL=https://ab.bykc.click&& node apps/server/scripts/e2e.mjs", "online"), bg="#3d5a5a", fg="#a6e0e0")
+        btn(bar_row2, "🌐 线上三连", lambda: self.run_short("set URL=https://ab.bykc.click&& node apps/server/scripts/e2e.mjs --triple", "online"), bg="#3d5a5a", fg="#a6e0e0")
+        btn(bar_row2, "💾 git 提交", self.git_commit, bg="#2d4d5a", fg="#a6d8ff")
+        btn(bar_row2, "🚀 部署到线上", self.deploy_online, bg="#5a3d2d", fg="#ffd6a6")
+        btn(bar_row2, "清日志", self.clear_logs)
+        btn(bar_row2, "复制日志", self.copy_logs)
+
+        self.status_label = tk.Label(bar_row2, text="服务器: 未知", fg="#888", bg="#0d0d0f")
         self.status_label.pack(side=tk.RIGHT, padx=8)
 
         tk.Label(root, text="指令区（可手动粘贴，或点下方「📋 从剪贴板运行」自动填入并执行）：",
@@ -279,6 +283,44 @@ class App:
             if self.auto_copy.get():
                 self.root.after(150, self.copy_logs)
         threading.Thread(target=worker, daemon=True).start()
+
+
+    def git_commit(self):
+        threading.Thread(target=self._git_commit_worker, daemon=True).start()
+
+    def _git_commit_worker(self):
+        import datetime
+        msg = "chore: auto commit " + datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        def run_step(cmdline):
+            log_queue.put("[git] $ " + cmdline)
+            try:
+                proc = subprocess.Popen(
+                    "chcp 65001 >nul && " + cmdline, cwd=ROOT, shell=True,
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    text=True, encoding="utf-8", errors="replace", bufsize=1)
+            except Exception as e:
+                log_queue.put("[err] " + str(e))
+                return -1
+            for line in proc.stdout:
+                log_queue.put("[git] " + line.rstrip())
+            proc.wait()
+            return proc.returncode
+
+        try:
+            if run_step("git add -A") != 0:
+                log_queue.put("[git] add 失败")
+                return
+            run_step("git status --short")
+            rc = run_step('git commit -m "' + msg + '"')
+            if rc != 0:
+                log_queue.put("[git] commit 返回 " + str(rc) + "（可能无变更）")
+            run_step("git log --oneline -5")
+            log_queue.put("[git] OK")
+            if self.auto_copy.get():
+                self.root.after(200, self.copy_logs)
+        except Exception as e:
+            log_queue.put("[err] git: " + str(e))
 
     def deploy_online(self):
         if self.apply_msg.cget("text").startswith("部署中"):
