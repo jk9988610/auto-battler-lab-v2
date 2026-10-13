@@ -1,5 +1,10 @@
 (function(){
 var myUid=null;
+var autoEndTurnTimer=null;
+var autoEndTurnBusy=false;
+var AUTO_INTERVAL_MS=1000;
+var _lastState=null;
+var _lastLogT=0;
 var _lastStateKey='';
 var _lastLine={};
 var gameOverLocked=false;
@@ -85,6 +90,7 @@ function inject(){
     +'<div id="gBoard"></div>'
     +'<hr style="border-color:#2d2d33"/>'
     +'<div><b>我的商店</b>（每张3金） <button onclick="doRefresh()">刷新(1金)</button> <button id="btnFreeze" onclick="doFreeze()">冻结</button> <button id="btnUpgrade" onclick="doUpgrade()">升级酒馆</button> <button onclick="doDebugTriple()">三连测试</button></div>'
+    +'<div style="margin-top:6px"><b>AI Proxy</b> <button id="btnProxy" onclick="doToggleProxy()">AI: OFF</button> <select id="selProxyStyle" onchange="doSetAIProxyStyle(this.value)"><option value="conservative">Conservative</option><option value="standard">Standard</option><option value="aggressive">Aggressive</option></select> <span style="color:#888;font-size:11px">(AI plays for you on end-turn)</span></div>'
     +'<div id="gShop"></div>'
     +'<hr style="border-color:#2d2d33"/>'
     +'<div><b>我的手牌</b>（上阵/出售，3张同名同星合成金色）</div>'
@@ -92,6 +98,9 @@ function inject(){
     +'<hr style="border-color:#2d2d33"/>'
     +'<div><b>所有玩家</b></div>'
     +'<div id="gPlayers"></div>'
+    +'<hr style="border-color:#2d2d33"/>'
+    +'<div><b>\u5bf9\u5c40\u4e8b\u4ef6</b></div>'
+    +'<div id="gEventLog" style="max-height:240px;overflow-y:auto;background:#0a0a0c;border:1px solid #1e1e22;border-radius:4px;padding:6px;font-size:11px;color:#8cf;white-space:pre-wrap"></div>'
     +'<hr style="border-color:#2d2d33"/>'
     +'<div><b>战斗结果</b></div>'
     +'<div id="gBattle" style="color:#bbb">（暂无）</div>'
@@ -164,6 +173,22 @@ function makeCardEl(card, actions){
 
 function renderState(state){
   if(!state)return;
+  _lastState = state;
+  if(state.log && Array.isArray(state.log)){
+    var box = document.getElementById('gEventLog');
+    if(box){
+      var prevTop = box.scrollTop;
+      var prevH = box.scrollHeight;
+      var wasAtBottom = (prevTop + box.clientHeight) >= (prevH - 5);
+      box.innerHTML = '';
+      state.log.forEach(function(entry){
+        var line = document.createElement('div');
+        line.textContent = entry.msg;
+        box.appendChild(line);
+      });
+      if(wasAtBottom) box.scrollTop = box.scrollHeight;
+    }
+  }
   document.getElementById('gRoom').textContent=state.roomId;
   document.getElementById('gTurn').textContent=String(state.turn);
   document.getElementById('gPhase').textContent=state.phase==='prepare'?'准备':(state.phase==='combat'?'战斗':'结束');
@@ -179,6 +204,18 @@ function renderState(state){
   document.getElementById('gHp').textContent=me?String(me.hp):'-';
   document.getElementById('gTier').textContent=me?String(me.tavernTier||1):'-';
 
+  if(me && me.useAIProxy && me.alive && state.phase === 'prepare' && !me.ready){
+    startAutoEndTurn();
+  } else if(!me || !me.useAIProxy || !me.alive || state.phase !== 'prepare' || me.ready){
+    stopAutoEndTurn();
+  }
+  var btnProxy=document.getElementById('btnProxy');
+  if(btnProxy && me){
+    if(me.useAIProxy){ btnProxy.textContent = 'AI: ON'; btnProxy.style.background = '#5a2d2d'; btnProxy.style.borderColor = '#a05050'; }
+    else{ btnProxy.textContent = 'AI: OFF'; btnProxy.style.background = ''; btnProxy.style.borderColor = ''; }
+  }
+  var selStyle=document.getElementById('selProxyStyle');
+  if(selStyle && me){ selStyle.value = me.aiStyle || 'standard'; }
   var btnUp = document.getElementById('btnUpgrade');
   if(btnUp && me){
     var tier = me.tavernTier||1;
@@ -410,6 +447,174 @@ function renderBattle(battle){
   }
 }
 
+var _reportedRankKey = '';
+
+function getStats(){
+  try{
+    var raw = sessionStorage.getItem('ab_stats') || localStorage.getItem('ab_stats');
+    if(!raw) return { wins: 0, losses: 0, games: 0 };
+    var o = JSON.parse(raw);
+    return { wins: o.wins|0, losses: o.losses|0, games: o.games|0 };
+  }catch(e){
+    return { wins: 0, losses: 0, games: 0 };
+  }
+}
+
+function saveStats(st){
+  try{ localStorage.setItem('ab_stats', JSON.stringify(st)); }catch(e){}
+}
+
+function fmtBoard(board){
+  if(!board || board.length === 0) return "(empty)";
+  return board.map(function(c){
+    var g = c.golden ? "*" : "";
+    var kw = (c.keywords && c.keywords.length) ? "[" + c.keywords.join(",") + "]" : "";
+    return c.name + g + "(" + c.attack + "/" + c.hp + ")" + kw;
+  }).join(" ");
+}
+
+function stopAutoEndTurn(){
+  if(autoEndTurnTimer){
+    clearInterval(autoEndTurnTimer);
+    autoEndTurnTimer = null;
+  }
+  autoEndTurnBusy = false;
+}
+
+function tickAutoEndTurn(){
+  if(autoEndTurnBusy) return;
+  if(!window.socket) return;
+  var st = _lastState;
+  if(!st) return;
+  if(st.phase !== 'prepare') return;
+  var uid = getMyUid();
+  if(uid == null) return;
+  var me = null;
+  st.players.forEach(function(x){ if(x.uid === uid) me = x; });
+  if(!me) return;
+  if(!me.useAIProxy) { stopAutoEndTurn(); return; }
+  if(!me.alive) { stopAutoEndTurn(); return; }
+  if(me.ready) return;
+
+  autoEndTurnBusy = true;
+  window.socket.emit('game:endTurn', function(res){
+    autoEndTurnBusy = false;
+    if(!res || !res.ok){
+      if(typeof window.log === 'function') window.log('auto endTurn failed: ' + (res && res.error), 'err');
+    }
+  });
+}
+
+function startAutoEndTurn(){
+  if(autoEndTurnTimer) return;
+  autoEndTurnTimer = setInterval(tickAutoEndTurn, AUTO_INTERVAL_MS);
+  if(typeof window.log === 'function') window.log('[proxy] auto endTurn started (every ' + (AUTO_INTERVAL_MS/1000) + 's)', 'ok');
+}
+
+function reportGameOver(rankings){
+  if(!rankings || rankings.length === 0) return;
+  var key = rankings.map(function(r){ return r.uid + ':' + r.rank; }).join(',');
+  if(key === _reportedRankKey) return;
+  _reportedRankKey = key;
+
+  var uid = getMyUid();
+  var myRank = null;
+  rankings.forEach(function(r){ if(r.uid === uid) myRank = r.rank; });
+
+  var isWin = myRank === 1;
+  var st = getStats();
+  st.games += 1;
+  if(isWin) st.wins += 1; else st.losses += 1;
+  saveStats(st);
+
+  var t = new Date();
+  var timeStr = t.getFullYear() + '-' + padTwo(t.getMonth()+1) + '-' + padTwo(t.getDate()) + ' ' + padTwo(t.getHours()) + ':' + padTwo(t.getMinutes());
+
+  var rec = {
+    time: timeStr,
+    myUid: uid,
+    myRank: myRank,
+    isWin: isWin,
+    rankings: rankings,
+  };
+  var hist = getHistory();
+  hist.push(rec);
+  if(hist.length > 50) hist = hist.slice(-50);
+  saveHistory(hist);
+
+  // 打印历史
+  var lines = [];
+  lines.push('');
+  lines.push('============ MATCH HISTORY ============');
+  lines.push('Time: ' + timeStr);
+  lines.push('----------------------------------------');
+  rankings.forEach(function(r){
+    var tag = (r.uid === uid) ? '  <<< YOU' : '';
+    var aiTag = r.isAI ? ' [AI]' : '';
+    var crown = (r.rank === 1) ? ' [WIN]' : '';
+    lines.push('#' + r.rank + '  ' + r.username + aiTag + crown + tag + '  hp=' + r.hp + ' tier=T' + r.tavernTier);
+    lines.push('     ' + fmtBoard(r.board));
+  });
+  lines.push('----------------------------------------');
+  if(myRank === null){
+    lines.push('本局: 未参与');
+  } else if(isWin){
+    lines.push('本局: 第 #1 名 (胜利)');
+  } else {
+    lines.push('本局: 第 #' + myRank + ' 名 (失败)');
+  }
+  var rate = st.games > 0 ? (st.wins / st.games * 100).toFixed(1) : '0.0';
+  lines.push('累计: ' + st.wins + ' 胜 / ' + st.games + ' 局  (胜率 ' + rate + '%)');
+  lines.push('========================================');
+
+  lines.forEach(function(l){
+    if(typeof window.log === 'function') window.log(l, isWin ? 'ok' : '');
+    try{ console.log(l); }catch(e){}
+  });
+}
+
+function padTwo(n){ return n < 10 ? '0' + n : '' + n; }
+
+function getHistory(){
+  try{
+    var raw = localStorage.getItem('ab_history');
+    if(!raw) return [];
+    var arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr : [];
+  }catch(e){ return []; }
+}
+
+function saveHistory(h){
+  try{ localStorage.setItem('ab_history', JSON.stringify(h)); }catch(e){}
+}
+
+window.showHistory = function(){
+  var h = getHistory();
+  if(h.length === 0){
+    if(typeof window.log === 'function') window.log('(no history)');
+    return;
+  }
+  h.forEach(function(rec){
+    var lines = [];
+    lines.push('--- ' + rec.time + ' ---');
+    rec.rankings.forEach(function(r){
+      var tag = (r.uid === rec.myUid) ? ' <<< YOU' : '';
+      var aiTag = r.isAI ? ' [AI]' : '';
+      lines.push('#' + r.rank + ' ' + r.username + aiTag + tag + ' hp=' + r.hp + ' T' + r.tavernTier);
+      lines.push('  ' + fmtBoard(r.board));
+    });
+    lines.forEach(function(l){
+      if(typeof window.log === 'function') window.log(l, '');
+    });
+  });
+};
+
+window.clearHistory = function(){
+  try{ localStorage.removeItem('ab_history'); }catch(e){}
+  try{ localStorage.removeItem('ab_stats'); }catch(e){}
+  if(typeof window.log === 'function') window.log('history cleared');
+};
+
 function renderRank(rankings){
   var el=document.getElementById('gRank');
   el.innerHTML='';
@@ -426,6 +631,7 @@ function renderRank(rankings){
     el.appendChild(row);
   });
   if(typeof window.log==='function'){
+    reportGameOver(rankings);
     window.log('[rank] '+rankings.map(function(r){return '#'+r.rank+' '+r.username;}).join('  '),'ok');
   }
 }
@@ -521,6 +727,7 @@ function patchSocket(){
     if(data&&data.user)myUid=data.user.uid;
   });
   window.socket.on('room:started',function(data){
+    _lastLogT = 0;
     gameOverLocked=false;
     clearGameOver();
     _lastStateKey='';
@@ -546,12 +753,15 @@ function patchSocket(){
     }
   });
   window.socket.on('game:finished',function(data){
+    stopAutoEndTurn();
+    if(lastRankings && lastRankings.length>0) reportGameOver(lastRankings);
     gameOverLocked=true;
     showGameOver();
     enterGame();
     if(typeof window.log==='function')window.log('[game] 对局结束 房间已重置','ok');
   });
   window.socket.on('game:closed',function(){
+    stopAutoEndTurn();
     gameOverLocked=false;
     clearGameOver();
     if(typeof window.log==='function')window.log('对局已关闭');
@@ -592,6 +802,36 @@ window.doFreeze=function(){ emitGame('game:freeze'); };
 window.doUpgrade=function(){ emitGame('game:upgrade'); };
 window.endTurn=function(){ emitGame('game:endTurn'); };
 window.doDebugTriple=function(){ emitGame('game:debug-triple'); };
+window.doToggleProxy=function(){
+  var st = _lastState;
+  var uid = getMyUid();
+  var me = null;
+  if(st && uid != null){ st.players.forEach(function(p){ if(p.uid === uid) me = p; }); }
+  var next = !(me && me.useAIProxy);
+  window.doSetAIProxy(next);
+};
+window.doSetAIProxy=function(enabled){
+  if(!window.socket){ if(typeof window.log==='function') window.log('[proxy] no socket','err'); return; }
+  var sel=document.getElementById('selProxyStyle');
+  var style=sel?sel.value:'standard';
+  if(typeof window.log==='function') window.log('[proxy] sending: enabled=' + enabled + ' style=' + style,'');
+  window.socket.emit('game:setAIProxy',{enabled:!!enabled,style:style},function(res){
+    if(typeof window.log==='function'){
+      if(!res||!res.ok){ window.log('[proxy] setAIProxy FAILED: ' + (res&&res.error),'err'); }
+      else{ window.log('[proxy] setAIProxy OK','ok'); }
+    }
+    try{ console.log('[proxy] setAIProxy resp', res); }catch(e){}
+  });
+};
+window.doSetAIProxyStyle=function(style){
+  if(!window.socket) return;
+  var chk=document.getElementById('chkProxy');
+  var enabled=chk?chk.checked:false;
+  if(!enabled) return;
+  window.socket.emit('game:setAIProxy',{enabled:true,style:style},function(res){
+    if(!res||!res.ok){ if(typeof window.log==='function')window.log('setStyle failed: '+(res&&res.error),'err'); }
+  });
+};
 
 window.backToLobby=function(){
   gameOverLocked=false;

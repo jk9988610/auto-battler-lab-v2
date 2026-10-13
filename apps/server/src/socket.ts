@@ -307,6 +307,15 @@ export function attachSocket(http: HttpServer) {
       if (cb) cb({ ok: true });
     });
 
+    socket.on("game:setAIProxy", function (payload: { enabled: boolean; style?: string }, cb?: (r: unknown) => void) {
+      const g = findGameBySocket(socket.id);
+      if (!g) { if (cb) cb({ ok: false, error: "no game" }); return; }
+      const res = Games.playerSetAIProxy(g.roomId, user.uid, !!payload.enabled, payload.style || "standard");
+      if (!res.ok) { if (cb) cb({ ok: false, error: res.error }); return; }
+      if (res.state) broadcastGame(res.state);
+      if (cb) cb({ ok: true });
+    });
+
     socket.on("disconnect", function (reason) {
       console.log("[socket] disconnect uid=" + user.uid + " reason=" + reason);
       const result = Rooms.markOffline(socket.id);

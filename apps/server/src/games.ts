@@ -24,6 +24,7 @@ export interface PlayerState {
   tavernTier: number;
   isAI?: boolean;
   aiStyle?: string;
+  useAIProxy?: boolean;
 }
 
 export interface GameState {
@@ -32,6 +33,7 @@ export interface GameState {
   phase: "prepare" | "combat" | "over";
   players: PlayerState[];
   createdAt: number;
+  log?: Array<{ t: number; msg: string }>;
 }
 
 export interface BattlePairing {
@@ -56,7 +58,7 @@ export interface BattleResult {
   pairings: BattlePairing[];
   eliminated: Array<{ uid: number; username: string }>;
   gameOver: boolean;
-  rankings: Array<{ uid: number; username: string; rank: number }>;
+  rankings: Array<{ uid: number; username: string; rank: number; hp: number; tavernTier: number; isAI: boolean; board: Card[] }>;
 }
 
 const BUY_COST = 3;
@@ -207,6 +209,12 @@ function mergeTriplesHand(p: PlayerState): Card[] {
   return merged;
 }
 
+function logEvent(g: GameState, msg: string): void {
+  if (!g.log) g.log = [];
+  g.log.push({ t: Date.now(), msg: msg });
+  if (g.log.length > 200) g.log.splice(0, g.log.length - 200);
+}
+
 const games = new Map<string, GameState>();
 
 export function startGame(roomId: string, players: { uid: number; username: string; isAI?: boolean }[]): GameState {
@@ -228,7 +236,8 @@ export function startGame(roomId: string, players: { uid: number; username: stri
         board: [],
         tavernTier: 1,
         isAI: !!p.isAI,
-        aiStyle: p.isAI ? ["conservative", "standard", "aggressive"][Math.floor(Math.random() * 3)] : undefined,
+        aiStyle: p.isAI ? ["conservative", "standard", "aggressive"][Math.floor(Math.random() * 3)] : "standard",
+        useAIProxy: false,
       };
     }),
     createdAt: Date.now(),
@@ -438,7 +447,7 @@ function runBattle(g: GameState): BattleResult {
 
   const aliveLeft = g.players.filter(function (p) { return p.alive; });
   const gameOver = aliveLeft.length <= 1;
-  const rankings: Array<{ uid: number; username: string; rank: number }> = [];
+  const rankings: Array<{ uid: number; username: string; rank: number; hp: number; tavernTier: number; isAI: boolean; board: Card[] }> = [];
 
   if (gameOver) {
     g.phase = "over";
@@ -447,11 +456,30 @@ function runBattle(g: GameState): BattleResult {
       .sort(function (x, y) { return x.hp - y.hp; });
     let rank = g.players.length;
     dead.forEach(function (p) {
-      rankings.push({ uid: p.uid, username: p.username, rank: rank });
+      rankings.push({
+        uid: p.uid, username: p.username, rank: rank,
+        hp: p.hp, tavernTier: p.tavernTier || 1, isAI: !!p.isAI,
+        board: p.board.map(function (c) {
+          const x: Card = { id: c.id, name: c.name, tier: c.tier, attack: c.attack, hp: c.hp };
+          if (c.golden) x.golden = c.golden;
+          if (c.keywords) x.keywords = c.keywords.slice();
+          return x;
+        }),
+      });
       rank -= 1;
     });
     if (aliveLeft.length === 1) {
-      rankings.push({ uid: aliveLeft[0].uid, username: aliveLeft[0].username, rank: 1 });
+      const a = aliveLeft[0];
+      rankings.push({
+        uid: a.uid, username: a.username, rank: 1,
+        hp: a.hp, tavernTier: a.tavernTier || 1, isAI: !!a.isAI,
+        board: a.board.map(function (c) {
+          const x: Card = { id: c.id, name: c.name, tier: c.tier, attack: c.attack, hp: c.hp };
+          if (c.golden) x.golden = c.golden;
+          if (c.keywords) x.keywords = c.keywords.slice();
+          return x;
+        }),
+      });
     }
     rankings.sort(function (x, y) { return x.rank - y.rank; });
   }
@@ -470,13 +498,14 @@ function runAITurn(g: GameState, ai: PlayerState): void {
     if (style === "aggressive") {
       shouldUpgrade = ai.gold >= cost;
     } else if (style === "conservative") {
-      shouldUpgrade = ai.gold >= cost + 3 && ai.board.length >= 4;
+      shouldUpgrade = ai.gold >= cost && ai.board.length >= 4;
     } else {
       shouldUpgrade = ai.gold >= cost && ai.board.length >= 3;
     }
     if (shouldUpgrade) {
       ai.gold -= cost;
       ai.tavernTier += 1;
+      logEvent(g, ai.username + " \u5347\u7ea7\u5230 T" + ai.tavernTier);
     }
   }
 
@@ -498,6 +527,7 @@ function runAITurn(g: GameState, ai: PlayerState): void {
   while (ai.hand.length > 0 && ai.board.length < BOARD_SIZE) {
     const card = ai.hand.shift()!;
     ai.board.push(card);
+    logEvent(g, ai.username + " \u4e0a\u9635 " + card.name);
     triggerBattlecry(g, ai, card.id);
   }
 }
@@ -512,6 +542,10 @@ export function playerEndTurn(
   const p = findPlayer(g, uid);
   if (!p) return { ok: false, error: "not in game" };
   if (!p.alive) return { ok: false, error: "eliminated" };
+  // \u771f\u4eba\u5f00\u4e86\u4ee3\u7406\uff0c\u5148\u8dd1\u4e00\u6b21 AI \u884c\u4e3a
+  if (p.useAIProxy && !p.isAI && p.alive) {
+    runAITurn(g, p);
+  }
   p.ready = true;
 
   // AI \u7acb\u5373\u884c\u52a8\u5e76 ready
@@ -565,6 +599,24 @@ export function playerEndTurn(
   return { ok: true, state: g, battle: lastBattle };
 }
 
+export function playerSetAIProxy(
+  roomId: string,
+  uid: number,
+  enabled: boolean,
+  style: string
+): { ok: boolean; error?: string; state?: GameState } {
+  const g = games.get(roomId);
+  if (!g) return { ok: false, error: "no game" };
+  const p = findPlayer(g, uid);
+  if (!p) return { ok: false, error: "not in game" };
+  if (p.isAI) return { ok: false, error: "AI cannot enable proxy" };
+  p.useAIProxy = !!enabled;
+  if (style === "conservative" || style === "standard" || style === "aggressive") {
+    p.aiStyle = style;
+  }
+  return { ok: true, state: g };
+}
+
 export function playerBuy(
   roomId: string,
   uid: number,
@@ -582,7 +634,13 @@ export function playerBuy(
   p.shop.splice(slot, 1);
   p.hand.push(card);
   const merged = mergeTriplesHand(p);
-  return { ok: true, state: g, merged: merged };
+    logEvent(g, p.username + " \u4e70\u4e86 " + card.name + " (T" + card.tier + ")");
+  if (merged.length > 0) {
+    merged.forEach(function (m) {
+      logEvent(g, p.username + " \u4e09\u8fde\u5408\u6210 " + m.name + "!");
+    });
+  }
+return { ok: true, state: g, merged: merged };
 }
 
 export function playerSell(
@@ -597,7 +655,8 @@ export function playerSell(
   if (handIndex < 0 || handIndex >= p.hand.length) return { ok: false, error: "invalid index" };
   p.hand.splice(handIndex, 1);
   p.gold = Math.min(p.gold + SELL_REFUND, MAX_GOLD);
-  return { ok: true, state: g };
+    logEvent(g, p.username + " \u5356\u4e86 " + card.name);
+return { ok: true, state: g };
 }
 
 function triggerBattlecry(g: GameState, p: PlayerState, sourceId: string): void {
@@ -634,7 +693,8 @@ export function playerPlace(
   if (p.board.length >= BOARD_SIZE) return { ok: false, error: "board full" };
   const card = p.hand.splice(handIndex, 1)[0];
   p.board.push(card);
-  triggerBattlecry(g, p, card.id);
+    logEvent(g, p.username + " \u4e0a\u9635 " + card.name);
+triggerBattlecry(g, p, card.id);
   return { ok: true, state: g };
 }
 
@@ -688,7 +748,8 @@ export function playerUpgrade(
   if (p.gold < cost) return { ok: false, error: "not enough gold" };
   p.gold -= cost;
   p.tavernTier += 1;
-  return { ok: true, state: g, cost: cost, newTier: p.tavernTier };
+    logEvent(g, p.username + " \u5347\u7ea7\u5230 T" + p.tavernTier + " \u9152\u9986");
+return { ok: true, state: g, cost: cost, newTier: p.tavernTier };
 }
 
 export function debugForceTriple(
