@@ -457,6 +457,40 @@ function runBattle(g: GameState): BattleResult {
   return { turn: g.turn, pairings: pairings, eliminated: eliminated, gameOver: gameOver, rankings: rankings };
 }
 
+function runAITurn(g: GameState, ai: PlayerState): void {
+  if (!ai.alive) return;
+
+  // 1. \u82e5\u91d1\u5e01\u8db3\u591f\u4e14\u80fd\u7559\u4e0b 3 \u91d1\u4e70\u724c\uff0c\u5148\u5347\u7ea7
+  if (ai.tavernTier < MAX_TIER) {
+    const cost = UPGRADE_COST[ai.tavernTier];
+    if (ai.gold >= cost + 3) {
+      ai.gold -= cost;
+      ai.tavernTier += 1;
+    }
+  }
+
+  // 2. \u4e70\u724c\uff1a\u4f18\u5148\u4e70\u5546\u5e97\u91cc tier \u6700\u9ad8\u7684\uff0c\u624b\u724c+\u573a\u4e0a\u4e0d\u8d85 7
+  while (ai.gold >= BUY_COST && ai.shop.length > 0 && (ai.board.length + ai.hand.length) < BOARD_SIZE) {
+    let bestIdx = 0;
+    for (let i = 1; i < ai.shop.length; i++) {
+      if (ai.shop[i].tier > ai.shop[bestIdx].tier) bestIdx = i;
+    }
+    const card = ai.shop.splice(bestIdx, 1)[0];
+    ai.gold -= BUY_COST;
+    ai.hand.push(card);
+  }
+
+  // 3. \u4e09\u8fde\u5408\u6210
+  mergeTriplesHand(ai);
+
+  // 4. \u624b\u724c\u5168\u90e8\u4e0a\u9635
+  while (ai.hand.length > 0 && ai.board.length < BOARD_SIZE) {
+    const card = ai.hand.shift()!;
+    ai.board.push(card);
+    triggerBattlecry(g, ai, card.id);
+  }
+}
+
 export function playerEndTurn(
   roomId: string,
   uid: number
@@ -469,10 +503,18 @@ export function playerEndTurn(
   if (!p.alive) return { ok: false, error: "eliminated" };
   p.ready = true;
 
-  // AI \u81ea\u52a8 ready
-  g.players.forEach(function (x) {
-    if (x.isAI && x.alive) x.ready = true;
+  // \u6240\u6709\u771f\u4eba\u90fd\u7ed3\u675f\u540e\uff0c\u8ba9 AI \u884c\u52a8\u5e76 ready
+  const allHumansReady = g.players.every(function (x) {
+    return !x.alive || x.isAI || x.ready;
   });
+  if (allHumansReady) {
+    g.players.forEach(function (x) {
+      if (x.isAI && x.alive && !x.ready) {
+        runAITurn(g, x);
+        x.ready = true;
+      }
+    });
+  }
 
   const allReady = g.players.every(function (x) { return !x.alive || x.ready; });
   if (!allReady) return { ok: true, state: g };
