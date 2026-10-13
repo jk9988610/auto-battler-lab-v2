@@ -180,7 +180,7 @@ export function tryStart(socketId: string): { room: Room | null; error?: string 
   const room = found as Room;
   const me = room.players.find(function (x) { return x.socketId === socketId; });
   if (!me || !me.isHost) return { room: null, error: "not host" };
-  if (room.players.length < 2) return { room: null, error: "need at least 2 players" };
+  if (room.players.length < 1) return { room: null, error: "empty room" };
   const allReady = room.players.every(function (p) { return p.ready; });
   if (!allReady) return { room: null, error: "not all ready" };
   room.status = "playing";

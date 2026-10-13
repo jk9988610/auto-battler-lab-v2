@@ -23,6 +23,7 @@ export interface PlayerState {
   board: Card[];
   tavernTier: number;
   isAI?: boolean;
+  aiStyle?: string;
 }
 
 export interface GameState {
@@ -227,6 +228,7 @@ export function startGame(roomId: string, players: { uid: number; username: stri
         board: [],
         tavernTier: 1,
         isAI: !!p.isAI,
+        aiStyle: p.isAI ? ["conservative", "standard", "aggressive"][Math.floor(Math.random() * 3)] : undefined,
       };
     }),
     createdAt: Date.now(),
@@ -463,7 +465,16 @@ function runAITurn(g: GameState, ai: PlayerState): void {
   // 1. \u82e5\u91d1\u5e01\u8db3\u591f\u4e14\u80fd\u7559\u4e0b 3 \u91d1\u4e70\u724c\uff0c\u5148\u5347\u7ea7
   if (ai.tavernTier < MAX_TIER) {
     const cost = UPGRADE_COST[ai.tavernTier];
-    if (ai.gold >= cost + 3) {
+    const style = ai.aiStyle || "standard";
+    let shouldUpgrade = false;
+    if (style === "aggressive") {
+      shouldUpgrade = ai.gold >= cost;
+    } else if (style === "conservative") {
+      shouldUpgrade = ai.gold >= cost + 3 && ai.board.length >= 4;
+    } else {
+      shouldUpgrade = ai.gold >= cost && ai.board.length >= 3;
+    }
+    if (shouldUpgrade) {
       ai.gold -= cost;
       ai.tavernTier += 1;
     }
@@ -503,7 +514,7 @@ export function playerEndTurn(
   if (!p.alive) return { ok: false, error: "eliminated" };
   p.ready = true;
 
-  // \u7acb\u5373\u8ba9\u672a ready \u7684 AI \u884c\u52a8\u5e76 ready
+  // AI \u7acb\u5373\u884c\u52a8\u5e76 ready
   g.players.forEach(function (x) {
     if (x.isAI && x.alive && !x.ready) {
       runAITurn(g, x);
@@ -511,13 +522,22 @@ export function playerEndTurn(
     }
   });
 
-  const allReady = g.players.every(function (x) { return !x.alive || x.ready; });
-  if (!allReady) return { ok: true, state: g };
+  let lastBattle: BattleResult | undefined;
+  const MAX_LOOP = 200;
+  let loop = 0;
 
-  g.phase = "combat";
-  const battle = runBattle(g);
+  while (loop++ < MAX_LOOP) {
+    const allReady = g.players.every(function (x) { return !x.alive || x.ready; });
+    if (!allReady) break;
 
-  if (!battle.gameOver) {
+    g.phase = "combat";
+    const battle = runBattle(g);
+    lastBattle = battle;
+
+    if (battle.gameOver) {
+      return { ok: true, state: g, battle: lastBattle };
+    }
+
     g.turn += 1;
     g.phase = "prepare";
     g.players.forEach(function (x) {
@@ -527,9 +547,22 @@ export function playerEndTurn(
       if (!x.frozen) x.shop = randShop(x.tavernTier);
       x.frozen = false;
     });
+
+    // \u8ba9\u6240\u6709 AI \u884c\u52a8
+    g.players.forEach(function (x) {
+      if (x.isAI && x.alive) {
+        runAITurn(g, x);
+        x.ready = true;
+      }
+    });
+
+    // \u82e5\u8fd8\u6709\u6d3b\u7740\u7684\u771f\u4eba\uff0c\u505c\u4e0b\u7b49\u8f93\u5165
+    const hasAliveHuman = g.players.some(function (x) { return x.alive && !x.isAI; });
+    if (hasAliveHuman) break;
+    // \u5426\u5219\u7ee7\u7eed\u63a8\u8fdb AI \u5bf9\u5c40
   }
 
-  return { ok: true, state: g, battle: battle };
+  return { ok: true, state: g, battle: lastBattle };
 }
 
 export function playerBuy(

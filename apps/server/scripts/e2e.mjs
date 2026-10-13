@@ -196,8 +196,8 @@ async function main(){
     // \u6218\u6597\u540e T2
     await sleep(400);
     const stT2 = await getState(sa);
-    const aiReadyAfterBattle = stT2.players.filter(p => p.isAI).every(p => p.ready === false);
-    log("T2: AI ready reset =", aiReadyAfterBattle, " turn =", stT2.turn);
+    const aiAutoReadyAtT2 = stT2.players.filter(p => p.isAI).every(p => p.ready === true);
+    log("T2: AI auto-ready at turn start =", aiAutoReadyAtT2, " turn =", stT2.turn);
 
     // A endTurn \u4e00\u6b21\u770b AI \u7b2c\u4e8c\u56de\u5408\u52a8\u4f5c
     const endA2 = await emitAck(sa, "game:endTurn");
@@ -210,7 +210,7 @@ async function main(){
     log("AI after T2: board sum =", aiBoardSumT2);
 
     aiOk = eightOk && twoHuman && sixAI && namesOk && aiInitEmpty && aiAllReady && aReady
-        && aiAllHaveBoard && battle.pairings.length === 4 && stT2.turn === 2 && aiReadyAfterBattle;
+        && aiAllHaveBoard && battle.pairings.length === 4 && stT2.turn === 2 && aiAutoReadyAtT2;
     console.log(aiOk ? "  ai PASS" : "  ai FAIL");
     console.log("---------------------------------");
     console.log("");
