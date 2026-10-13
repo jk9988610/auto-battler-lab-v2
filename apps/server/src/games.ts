@@ -132,6 +132,46 @@ const CARD_POOL: Array<{ name: string; tier: number; attack: number; hp: number;
   { name: "\u5deb\u5996\u738b", tier: 6, attack: 14, hp: 12 },
 ];
 
+export function startGame(roomId: string, players: { uid: number; username: string; isAI?: boolean }[]): GameState {
+  const state: GameState = {
+    roomId: roomId,
+    turn: 1,
+    phase: "prepare",
+    players: players.map(function (p) {
+      return {
+        uid: p.uid,
+        username: p.username,
+        gold: 3,
+        hp: 40,
+        ready: false,
+        frozen: false,
+        alive: true,
+        shop: randShop(1),
+        hand: [],
+        board: [],
+        tavernTier: 1,
+        isAI: !!p.isAI,
+        aiStyle: p.isAI ? ["conservative", "standard", "aggressive"][Math.floor(Math.random() * 3)] : "standard",
+        useAIProxy: false,
+      };
+    }),
+    createdAt: Date.now(),
+    log: [],
+  };
+  games.set(roomId, state);
+  return state;
+}
+
+export function getGame(roomId: string): GameState | undefined {
+  return games.get(roomId);
+}
+
+function findPlayer(g: GameState, uid: number): PlayerState | undefined {
+  return g.players.find(function (x) { return x.uid === uid; });
+}
+
+const games = new Map<string, GameState>();
+
 function goldForTurn(t: number): number {
   return Math.min(3 + (t - 1), MAX_GOLD);
 }
@@ -210,50 +250,11 @@ function mergeTriplesHand(p: PlayerState): Card[] {
 }
 
 function logEvent(g: GameState, msg: string): void {
-  if (!g.log) g.log = [];
-  g.log.push({ t: Date.now(), msg: msg });
-  if (g.log.length > 200) g.log.splice(0, g.log.length - 200);
-}
-
-const games = new Map<string, GameState>();
-
-export function startGame(roomId: string, players: { uid: number; username: string; isAI?: boolean }[]): GameState {
-  const state: GameState = {
-    roomId: roomId,
-    turn: 1,
-    phase: "prepare",
-    players: players.map(function (p) {
-      return {
-        uid: p.uid,
-        username: p.username,
-        gold: 3,
-        hp: 40,
-        ready: false,
-        frozen: false,
-        alive: true,
-        shop: randShop(1),
-        hand: [],
-        board: [],
-        tavernTier: 1,
-        isAI: !!p.isAI,
-        aiStyle: p.isAI ? ["conservative", "standard", "aggressive"][Math.floor(Math.random() * 3)] : "standard",
-        useAIProxy: false,
-      };
-    }),
-    createdAt: Date.now(),
-  };
-  games.set(roomId, state);
-  return state;
-}
-
-export function getGame(roomId: string): GameState | undefined {
-  return games.get(roomId);
-}
-
-function findPlayer(g: GameState, uid: number): PlayerState | undefined {
-  return g.players.find(function (x) { return x.uid === uid; });
-}
-
+    if (!g.log) g.log = [];
+    const prefix = "[T" + g.turn + "] ";
+    g.log.push({ t: Date.now(), msg: prefix + msg });
+    if (g.log.length > 2000) g.log.splice(0, g.log.length - 2000);
+  }
 function simulateBoardBattle(aBoard: Card[], bBoard: Card[]): {
   winnerSide: "a" | "b" | "draw";
   damage: number;
