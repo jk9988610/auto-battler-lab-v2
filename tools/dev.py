@@ -75,6 +75,16 @@ def kill_port(port):
         log_queue.put("[err] kill_port: " + str(e))
 
 
+def kill_node_procs():
+    try:
+        if sys.platform == "win32":
+            subprocess.run(["taskkill", "/F", "/IM", "node.exe"], capture_output=True)
+        else:
+            subprocess.run("pkill -f node", shell=True, capture_output=True)
+    except Exception as e:
+        log_queue.put("[err] kill_node_procs: " + str(e))
+
+
 def normalize_eol(content, eol):
     if eol == "lf":
         return content.replace("\r\n", "\n")

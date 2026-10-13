@@ -255,7 +255,7 @@ function logEvent(g: GameState, msg: string): void {
     g.log.push({ t: Date.now(), msg: prefix + msg });
     if (g.log.length > 2000) g.log.splice(0, g.log.length - 2000);
   }
-function simulateBoardBattle(aBoard: Card[], bBoard: Card[]): {
+function simulateBoardBattle(aBoard: Card[], bBoard: Card[], aTier: number, bTier: number): {
   winnerSide: "a" | "b" | "draw";
   damage: number;
   battleLog: string[];
@@ -392,7 +392,7 @@ function simulateBoardBattle(aBoard: Card[], bBoard: Card[]): {
     B.forEach(function (c) { dmg += c.attack; });
     return { winnerSide: "b", damage: Math.max(1, dmg), battleLog: battleLog, aSurvivors: [], bSurvivors: cleanShield(B) };
   }
-  return { winnerSide: "draw", damage: 1, battleLog: battleLog, aSurvivors: cleanShield(A), bSurvivors: cleanShield(B) };
+  return { winnerSide: "draw", damage: Math.max(aTier, bTier), battleLog: battleLog, aSurvivors: cleanShield(A), bSurvivors: cleanShield(B) };
 }
 
 function runBattle(g: GameState): BattleResult {
@@ -403,7 +403,7 @@ function runBattle(g: GameState): BattleResult {
   for (let i = 0; i + 1 < order.length; i += 2) {
     const a = order[i];
     const b = order[i + 1];
-    const sim = simulateBoardBattle(a.board, b.board);
+    const sim = simulateBoardBattle(a.board, b.board, a.tavernTier || 1, b.tavernTier || 1);
     const ap = boardPower(a);
     const bp = boardPower(b);
     let winnerUid: number;
@@ -422,6 +422,7 @@ function runBattle(g: GameState): BattleResult {
     }
 
     const loser = loserUid === a.uid ? a : b;
+    damage = Math.min(damage, 15);
     loser.hp -= damage;
 
     pairings.push({
@@ -511,53 +512,69 @@ function runAITurn(g: GameState, ai: PlayerState): void {
   }
 
   // 2. \u4e70\u724c\uff1a\u4f18\u5148\u4e70\u5546\u5e97\u91cc tier \u6700\u9ad8\u7684\uff0c\u624b\u724c+\u573a\u4e0a\u4e0d\u8d85 7
-  while (ai.gold >= BUY_COST && ai.shop.length > 0 && (ai.board.length + ai.hand.length) < BOARD_SIZE) {
-    let bestIdx = 0;
-    for (let i = 1; i < ai.shop.length; i++) {
-      if (ai.shop[i].tier > ai.shop[bestIdx].tier) bestIdx = i;
+  while (ai.gold >= BUY_COST && ai.shop.length > 0) {
+      let bestIdx = 0;
+      for (let i = 1; i < ai.shop.length; i++) {
+        if (ai.shop[i].tier > ai.shop[bestIdx].tier) bestIdx = i;
+      }
+      const candidate = ai.shop[bestIdx];
+      if (ai.board.length + ai.hand.length < BOARD_SIZE) {
+        ai.shop.splice(bestIdx, 1);
+        ai.gold -= BUY_COST;
+        ai.hand.push(candidate);
+      } else {
+        let worstIdx = 0;
+        for (let i = 1; i < ai.board.length; i++) {
+          if (ai.board[i].tier < ai.board[worstIdx].tier) worstIdx = i;
+        }
+        const worst = ai.board[worstIdx];
+        if (candidate.tier > worst.tier) {
+          ai.board.splice(worstIdx, 1);
+          ai.gold = Math.min(ai.gold + SELL_REFUND, MAX_GOLD);
+          logEvent(g, ai.username + " \u5356 " + worst.name + " (T" + worst.tier + ")");
+          ai.shop.splice(bestIdx, 1);
+          ai.gold -= BUY_COST;
+          ai.board.push(candidate);
+          logEvent(g, ai.username + " \u6362 " + candidate.name + " (T" + candidate.tier + ")");
+          triggerBattlecry(g, ai, candidate.id);
+        } else {
+          break;
+        }
+      }
     }
-    const card = ai.shop.splice(bestIdx, 1)[0];
-    ai.gold -= BUY_COST;
-    ai.hand.push(card);
-  }
 
-  // 3. \u4e09\u8fde\u5408\u6210
-  mergeTriplesHand(ai);
+    mergeTriplesHand(ai);
 
-  // 4. \u624b\u724c\u5168\u90e8\u4e0a\u9635
-  while (ai.hand.length > 0 && ai.board.length < BOARD_SIZE) {
-    const card = ai.hand.shift()!;
-    ai.board.push(card);
-    logEvent(g, ai.username + " \u4e0a\u9635 " + card.name);
-    triggerBattlecry(g, ai, card.id);
-  }
-}
-
-export function playerEndTurn(
-  roomId: string,
-  uid: number
-): { ok: boolean; error?: string; state?: GameState; battle?: BattleResult } {
-  const g = games.get(roomId);
-  if (!g) return { ok: false, error: "no game" };
-  if (g.phase === "over") return { ok: false, error: "game over" };
-  const p = findPlayer(g, uid);
-  if (!p) return { ok: false, error: "not in game" };
-  if (!p.alive) return { ok: false, error: "eliminated" };
-  // \u771f\u4eba\u5f00\u4e86\u4ee3\u7406\uff0c\u5148\u8dd1\u4e00\u6b21 AI \u884c\u4e3a
-  if (p.useAIProxy && !p.isAI && p.alive) {
-    runAITurn(g, p);
-  }
-  p.ready = true;
-
-  // AI \u7acb\u5373\u884c\u52a8\u5e76 ready
-  g.players.forEach(function (x) {
-    if (x.isAI && x.alive && !x.ready) {
-      runAITurn(g, x);
-      x.ready = true;
+    while (ai.hand.length > 0 && ai.board.length < BOARD_SIZE) {
+      const card = ai.hand.shift()!;
+      ai.board.push(card);
+      logEvent(g, ai.username + " \u4e0a\u9635 " + card.name);
+      triggerBattlecry(g, ai, card.id);
     }
-  });
+  }
 
-  let lastBattle: BattleResult | undefined;
+  export function playerEndTurn(
+    roomId: string,
+    uid: number
+  ): { ok: boolean; error?: string; state?: GameState; battle?: BattleResult } {
+    const g = games.get(roomId);
+    if (!g) return { ok: false, error: "no game" };
+    if (g.phase === "over") return { ok: false, error: "game over" };
+    const p = findPlayer(g, uid);
+    if (!p) return { ok: false, error: "not in game" };
+    if (!p.alive) return { ok: false, error: "eliminated" };
+    if (p.useAIProxy && !p.isAI && p.alive) {
+      runAITurn(g, p);
+    }
+    p.ready = true;
+    g.players.forEach(function (x) {
+      if (x.isAI && x.alive && !x.ready) {
+        runAITurn(g, x);
+        x.ready = true;
+      }
+    });
+
+    let lastBattle: BattleResult | undefined;
   const MAX_LOOP = 200;
   let loop = 0;
 
@@ -565,11 +582,25 @@ export function playerEndTurn(
     const allReady = g.players.every(function (x) { return !x.alive || x.ready; });
     if (!allReady) break;
 
+    logEvent(g, "\u56de\u5408\u5f00\u59cb");
     g.phase = "combat";
     const battle = runBattle(g);
     lastBattle = battle;
 
+    battle.pairings.forEach(function (pr) {
+      const wName = pr.winnerUid === pr.aUid ? pr.aName : pr.bName;
+      const lName = pr.winnerUid === pr.aUid ? pr.bName : pr.aName;
+      const wPow = pr.winnerUid === pr.aUid ? pr.aPower : pr.bPower;
+      const lPow = pr.winnerUid === pr.aUid ? pr.bPower : pr.aPower;
+      logEvent(g, wName + " (\u6218\u529b" + wPow + ") \u51fb\u8d25 " + lName + " (\u6218\u529b" + lPow + ")  -" + pr.damage + "hp");
+    });
+    battle.eliminated.forEach(function (e) {
+      logEvent(g, "\u2620 " + e.username + " \u88ab\u6dd8\u6c70");
+    });
+
     if (battle.gameOver) {
+      const winner = battle.rankings.find(function (r) { return r.rank === 1; });
+      if (winner) logEvent(g, "\uD83C\uDFC6 " + winner.username + " \u83b7\u80dc\uff01");
       return { ok: true, state: g, battle: lastBattle };
     }
 
@@ -654,7 +685,7 @@ export function playerSell(
   const p = findPlayer(g, uid);
   if (!p) return { ok: false, error: "not in game" };
   if (handIndex < 0 || handIndex >= p.hand.length) return { ok: false, error: "invalid index" };
-  p.hand.splice(handIndex, 1);
+  const card = p.hand.splice(handIndex, 1)[0];
   p.gold = Math.min(p.gold + SELL_REFUND, MAX_GOLD);
     logEvent(g, p.username + " \u5356\u4e86 " + card.name);
 return { ok: true, state: g };
