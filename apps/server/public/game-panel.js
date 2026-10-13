@@ -139,6 +139,14 @@ function makeCardEl(card, actions){
   div.appendChild(name);
   div.appendChild(stats);
   div.appendChild(tier);
+  if(card.keywords && card.keywords.length>0){
+    var kw=document.createElement('div');
+    kw.textContent=card.keywords.map(function(k){return '['+k+']';}).join(' ');
+    kw.style.color='#8cf';
+    kw.style.fontSize='11px';
+    kw.style.marginTop='2px';
+    div.appendChild(kw);
+  }
   if(actions && actions.length){
     var btnRow=document.createElement('div');
     btnRow.style.marginTop='6px';

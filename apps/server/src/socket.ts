@@ -273,6 +273,15 @@ export function attachSocket(http: HttpServer) {
       if (cb) cb({ ok: true });
     });
 
+    socket.on("game:debug-keyword", function (cb?: (r: unknown) => void) {
+      const g = findGameBySocket(socket.id);
+      if (!g) { if (cb) cb({ ok: false, error: "no game" }); return; }
+      const res = Games.debugGiveKeywordCard(g.roomId, user.uid);
+      if (!res.ok) { if (cb) cb({ ok: false, error: res.error }); return; }
+      if (res.state) broadcastGame(res.state);
+      if (cb) cb({ ok: true });
+    });
+
     socket.on("disconnect", function (reason) {
       console.log("[socket] disconnect uid=" + user.uid + " reason=" + reason);
       const result = Rooms.markOffline(socket.id);

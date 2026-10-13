@@ -5,6 +5,7 @@ export interface Card {
   attack: number;
   hp: number;
   golden?: boolean;
+  keywords?: string[];
 }
 
 export interface PlayerState {
@@ -71,25 +72,58 @@ const UPGRADE_COST: { [k: number]: number } = {
   5: 10,
 };
 
-const CARD_POOL: Array<{ name: string; tier: number; attack: number; hp: number }> = [
-  { name: "铁匠学徒", tier: 1, attack: 1, hp: 1 },
-  { name: "森林鹿", tier: 1, attack: 2, hp: 2 },
-  { name: "石甲卫兵", tier: 1, attack: 1, hp: 3 },
-  { name: "村庄农夫", tier: 1, attack: 1, hp: 2 },
-  { name: "小精灵", tier: 1, attack: 2, hp: 1 },
-  { name: "荒野狼", tier: 2, attack: 3, hp: 2 },
-  { name: "火焰法师", tier: 2, attack: 2, hp: 3 },
-  { name: "石像鬼", tier: 2, attack: 3, hp: 3 },
-  { name: "长剑兵", tier: 2, attack: 4, hp: 2 },
-  { name: "暗影刺客", tier: 3, attack: 4, hp: 2 },
-  { name: "铁甲卫", tier: 3, attack: 3, hp: 5 },
-  { name: "冰霜法师", tier: 3, attack: 4, hp: 4 },
-  { name: "白银枪骑", tier: 4, attack: 4, hp: 6 },
-  { name: "雷霆领主", tier: 4, attack: 5, hp: 7 },
-  { name: "龙骑兵", tier: 5, attack: 7, hp: 7 },
-  { name: "火焰元素", tier: 5, attack: 8, hp: 6 },
-  { name: "时空龙", tier: 6, attack: 10, hp: 10 },
-  { name: "深渊魔君", tier: 6, attack: 12, hp: 8 },
+const CARD_POOL: Array<{ name: string; tier: number; attack: number; hp: number; keywords?: string[] }> = [
+  // T1
+  { name: "\u94c1\u5320\u5b66\u5f92", tier: 1, attack: 1, hp: 1 },
+  { name: "\u68ee\u6797\u9e7f", tier: 1, attack: 2, hp: 2 },
+  { name: "\u77f3\u7532\u536b\u5175", tier: 1, attack: 1, hp: 3, keywords: ["\u5632\u8bca"] },
+  { name: "\u6751\u5e84\u519c\u592b", tier: 1, attack: 1, hp: 2 },
+  { name: "\u5c0f\u7cbe\u7075", tier: 1, attack: 2, hp: 1, keywords: ["\u98ce\u6012"] },
+  { name: "\u6301\u76fe\u6b65\u5175", tier: 1, attack: 1, hp: 4, keywords: ["\u5632\u8bca"] },
+  { name: "\u6bd2\u8702", tier: 1, attack: 1, hp: 1, keywords: ["\u5267\u6bd2"] },
+  { name: "\u6cbb\u7597\u5e08", tier: 1, attack: 1, hp: 2 },
+  // T2
+  { name: "\u8352\u91ce\u72fc", tier: 2, attack: 3, hp: 2 },
+  { name: "\u706b\u7130\u6cd5\u5e08", tier: 2, attack: 2, hp: 3 },
+  { name: "\u77f3\u50cf\u9b3c", tier: 2, attack: 3, hp: 3, keywords: ["\u5632\u8bca"] },
+  { name: "\u957f\u5251\u5175", tier: 2, attack: 4, hp: 2 },
+  { name: "\u5267\u6bd2\u8718\u86db", tier: 2, attack: 2, hp: 2, keywords: ["\u5267\u6bd2"] },
+  { name: "\u8f7b\u9a91\u5175", tier: 2, attack: 3, hp: 3, keywords: ["\u98ce\u6012"] },
+  { name: "\u76fe\u536b", tier: 2, attack: 2, hp: 4, keywords: ["\u5723\u76fe"] },
+  { name: "\u5c0f\u6cd5\u5e08", tier: 2, attack: 3, hp: 2 },
+  // T3
+  { name: "\u6697\u5f71\u523a\u5ba2", tier: 3, attack: 4, hp: 2 },
+  { name: "\u94c1\u7532\u536b", tier: 3, attack: 3, hp: 5, keywords: ["\u5632\u8bca"] },
+  { name: "\u51b0\u971c\u6cd5\u5e08", tier: 3, attack: 4, hp: 4 },
+  { name: "\u6bd2\u5203\u523a\u5ba2", tier: 3, attack: 3, hp: 3, keywords: ["\u5267\u6bd2"] },
+  { name: "\u5723\u5149\u9a91\u58eb", tier: 3, attack: 4, hp: 4, keywords: ["\u5723\u76fe"] },
+  { name: "\u53cc\u5203\u6218\u58eb", tier: 3, attack: 4, hp: 3, keywords: ["\u98ce\u6012"] },
+  { name: "\u5b88\u62a4\u5de8\u50cf", tier: 3, attack: 4, hp: 6, keywords: ["\u5632\u8bca", "\u5723\u76fe"] },
+  { name: "\u5f13\u7bad\u624b", tier: 3, attack: 5, hp: 2 },
+  // T4
+  { name: "\u767d\u94f6\u67aa\u9a91", tier: 4, attack: 4, hp: 6, keywords: ["\u5632\u8bca"] },
+  { name: "\u96f7\u970d\u9886\u4e3b", tier: 4, attack: 5, hp: 7 },
+  { name: "\u6bd2\u9f99", tier: 4, attack: 5, hp: 5, keywords: ["\u5267\u6bd2"] },
+  { name: "\u5723\u76fe\u62a4\u536b", tier: 4, attack: 4, hp: 8, keywords: ["\u5723\u76fe", "\u5632\u8bca"] },
+  { name: "\u72c2\u6218\u58eb", tier: 4, attack: 6, hp: 5, keywords: ["\u98ce\u6012"] },
+  { name: "\u91cd\u7532\u9a91\u58eb", tier: 4, attack: 5, hp: 8 },
+  { name: "\u53cc\u5934\u86c7", tier: 4, attack: 5, hp: 5, keywords: ["\u98ce\u6012"] },
+  { name: "\u5c60\u9b54\u8005", tier: 4, attack: 7, hp: 4 },
+  // T5
+  { name: "\u9f99\u9a91\u5175", tier: 5, attack: 7, hp: 7 },
+  { name: "\u706b\u7130\u5143\u7d20", tier: 5, attack: 8, hp: 6 },
+  { name: "\u8fdc\u53e4\u5b88\u536b", tier: 5, attack: 5, hp: 12, keywords: ["\u5632\u8bca"] },
+  { name: "\u6bd2\u6db2\u9886\u4e3b", tier: 5, attack: 6, hp: 6, keywords: ["\u5267\u6bd2", "\u98ce\u6012"] },
+  { name: "\u767d\u94f6\u56e2\u957f", tier: 5, attack: 6, hp: 10, keywords: ["\u5723\u76fe", "\u5632\u8bca"] },
+  { name: "\u96f7\u970d\u5de8\u517d", tier: 5, attack: 8, hp: 8, keywords: ["\u98ce\u6012"] },
+  { name: "\u6740\u622e\u8005", tier: 5, attack: 9, hp: 7 },
+  // T6
+  { name: "\u65f6\u7a7a\u9f99", tier: 6, attack: 10, hp: 10, keywords: ["\u5723\u76fe"] },
+  { name: "\u6df1\u6e0a\u9b54\u541b", tier: 6, attack: 12, hp: 8 },
+  { name: "\u6bd2\u7687", tier: 6, attack: 8, hp: 10, keywords: ["\u5267\u6bd2"] },
+  { name: "\u94a2\u94c1\u6cf0\u5766", tier: 6, attack: 8, hp: 15, keywords: ["\u5632\u8bca", "\u5723\u76fe"] },
+  { name: "\u72c2\u66b4\u6218\u795e", tier: 6, attack: 12, hp: 12, keywords: ["\u98ce\u6012"] },
+  { name: "\u5deb\u5996\u738b", tier: 6, attack: 14, hp: 12 },
 ];
 
 function goldForTurn(t: number): number {
@@ -100,7 +134,9 @@ function randCard(maxTier: number): Card {
   const pool = CARD_POOL.filter(function (c) { return c.tier <= maxTier; });
   const tpl = pool[Math.floor(Math.random() * pool.length)];
   const uid = Math.random().toString(36).slice(2, 8);
-  return { id: uid, name: tpl.name, tier: tpl.tier, attack: tpl.attack, hp: tpl.hp };
+  const card: Card = { id: uid, name: tpl.name, tier: tpl.tier, attack: tpl.attack, hp: tpl.hp };
+  if (tpl.keywords && tpl.keywords.length > 0) card.keywords = tpl.keywords.slice();
+  return card;
 }
 
 function randShop(maxTier: number): Card[] {
@@ -479,16 +515,37 @@ export function debugForceTriple(
   const tpl = CARD_POOL[0];
   p.hand = [];
   for (let i = 0; i < 3; i++) {
-    p.hand.push({
+    const c: Card = {
       id: Math.random().toString(36).slice(2, 8),
       name: tpl.name,
       tier: tpl.tier,
       attack: tpl.attack,
       hp: tpl.hp,
-    });
+    };
+    if (tpl.keywords && tpl.keywords.length > 0) c.keywords = tpl.keywords.slice();
+    p.hand.push(c);
   }
   const merged = mergeTriplesHand(p);
   return { ok: true, state: g, merged: merged };
+}
+
+export function debugGiveKeywordCard(
+  roomId: string,
+  uid: number
+): { ok: boolean; error?: string; state?: GameState } {
+  const g = games.get(roomId);
+  if (!g) return { ok: false, error: "no game" };
+  const p = findPlayer(g, uid);
+  if (!p) return { ok: false, error: "not in game" };
+  p.hand = [{
+    id: Math.random().toString(36).slice(2, 8),
+    name: "Stone Guard",
+    tier: 1,
+    attack: 1,
+    hp: 3,
+    keywords: ["Taunt", "Shield"],
+  }];
+  return { ok: true, state: g };
 }
 
 export function removeGame(roomId: string): void {

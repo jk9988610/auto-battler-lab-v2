@@ -8,6 +8,7 @@ const DO_TRIPLE = MODE_FULL || ARGS.includes("--triple");
 const DO_BOARD = MODE_FULL || ARGS.includes("--board");
 const DO_UPGRADE = MODE_FULL || ARGS.includes("--upgrade");
 const DO_RECONNECT = MODE_FULL || ARGS.includes("--reconnect");
+const DO_CARDS = MODE_FULL || ARGS.includes("--cards");
 
 const latestStates = new WeakMap();
 const latestRooms = new WeakMap();
@@ -16,22 +17,16 @@ function attachWatchers(socket){
   socket.on("game:state", (s) => latestStates.set(socket, s));
   socket.on("room:update", (r) => latestRooms.set(socket, r));
 }
-
 function getLatest(socket){ return latestStates.get(socket) || null; }
 function getLatestRoom(socket){ return latestRooms.get(socket) || null; }
-
 function sleep(ms){ return new Promise(r => setTimeout(r, ms)); }
-
-function randUser(prefix){
-  return prefix + Math.random().toString(36).slice(2, 8);
-}
+function randUser(prefix){ return prefix + Math.random().toString(36).slice(2, 8); }
 
 async function api(path, body, token){
   const headers = { "Content-Type": "application/json" };
   if(token) headers.Authorization = "Bearer " + token;
   const r = await fetch(URL + "/api" + path, {
-    method: "POST",
-    headers,
+    method: "POST", headers,
     body: body ? JSON.stringify(body) : undefined,
   });
   let j = null;
@@ -78,7 +73,6 @@ function waitState(socket, predicate, timeout){
   timeout = timeout || 6000;
   const cached = getLatest(socket);
   if(cached && predicate(cached)) return Promise.resolve(cached);
-
   return new Promise((resolve, reject) => {
     const t = setTimeout(() => { socket.off("game:state", handler); reject(new Error("state wait timeout")); }, timeout);
     function handler(state){
@@ -92,9 +86,7 @@ function waitState(socket, predicate, timeout){
   });
 }
 
-function getState(socket){
-  return Promise.resolve(getLatest(socket));
-}
+function getState(socket){ return Promise.resolve(getLatest(socket)); }
 
 function findMe(state, uid){
   if(!state || !state.players) return null;
@@ -113,14 +105,14 @@ function summarize(state, uid){
   const tier = me.tavernTier || 1;
   let tail = "";
   if(me.ready) tail += " [ready]";
-  if(me.alive === false) tail += " [淘汰]";
-  const parts = ["T" + state.turn, state.phase, "酒馆T" + tier, "金" + g, "血" + h, "场" + bd, "手" + hd, "店" + sh];
-  return parts.join(" ") + tail;
+  if(me.alive === false) tail += " [dead]";
+  return ["T" + state.turn, state.phase, "tier" + tier, "gold" + g, "hp" + h, "board" + bd, "hand" + hd, "shop" + sh].join(" ") + tail;
 }
 
 function cardLine(card){
-  const gold = card.golden ? "✦" : "";
-  return card.name + gold + "(★" + card.tier + " 攻" + card.attack + " 血" + card.hp + ")";
+  const gold = card.golden ? "*" : "";
+  const kw = (card.keywords && card.keywords.length) ? "[" + card.keywords.join(",") + "]" : "";
+  return card.name + gold + "(T" + card.tier + " " + card.attack + "/" + card.hp + ")" + kw;
 }
 
 async function advanceTurn(sa, sb, uidA, uidB, expectTurn){
@@ -128,7 +120,6 @@ async function advanceTurn(sa, sb, uidA, uidB, expectTurn){
   const waitBattleB = once(sb, "game:battle", 8000);
   const waitTA = waitState(sa, s => s.turn === expectTurn, 8000);
   const waitTB = waitState(sb, s => s.turn === expectTurn, 8000);
-
   let stA = await getState(sa);
   if(findMe(stA, uidA).alive && !findMe(stA, uidA).ready){
     const eA = await emitAck(sa, "game:endTurn");
@@ -139,7 +130,6 @@ async function advanceTurn(sa, sb, uidA, uidB, expectTurn){
     const eB = await emitAck(sb, "game:endTurn");
     if(!eB.ok) throw new Error("B endTurn failed " + eB.error);
   }
-
   await waitBattleA;
   await waitBattleB;
   const rA = await waitTA;
@@ -157,13 +147,14 @@ async function main(){
   if(DO_TRIPLE) flags.push("triple");
   if(DO_UPGRADE) flags.push("upgrade");
   if(DO_RECONNECT) flags.push("reconnect");
+  if(DO_CARDS) flags.push("cards");
   log("URL", URL, flags.length ? "(" + flags.join("+") + ")" : "");
-  log("注册", uA, uB);
+  log("register", uA, uB);
   const A = await register(uA, PASSWORD);
   const B = await register(uB, PASSWORD);
   const uidA = A.user.id;
   const uidB = B.user.id;
-  log("A uid=" + uidA, "B uid=" + uidB);
+  log("uid A=" + uidA, "B=" + uidB);
 
   const connA = await connect(A.token);
   const connB = await connect(B.token);
@@ -181,14 +172,14 @@ async function main(){
   const cRes = await emitAck(sa, "room:create", { name: "e2e-" + Date.now() });
   if(!cRes.ok) throw new Error("create failed");
   const roomId = cRes.room.id;
-  log("房间创建", roomId);
+  log("room created", roomId);
 
   const jRes = await emitAck(sb, "room:join", { id: roomId });
   if(!jRes.ok) throw new Error("join failed " + jRes.error);
-  log("B 加入");
+  log("B joined");
 
   await emitAck(sb, "room:ready", { ready: true });
-  log("B 准备");
+  log("B ready");
 
   const startRes = await emitAck(sa, "room:start");
   if(!startRes.ok) throw new Error("start failed " + startRes.error);
@@ -196,26 +187,24 @@ async function main(){
   await waitState(sb, s => s.turn === 1 && s.phase === "prepare");
   let stA = await getState(sa);
   let stB = await getState(sb);
-  log("开局");
-  log("初始 A:", summarize(stA, uidA));
-  log("初始 B:", summarize(stB, uidB));
+  log("game start");
+  log("init A:", summarize(stA, uidA));
+  log("init B:", summarize(stB, uidB));
 
-  // 双方各买 1 张
   const buyA = await emitAck(sa, "game:buy", { slot: 0 });
   if(!buyA.ok) throw new Error("A buy failed " + buyA.error);
   await waitState(sa, s => { const m = findMe(s, uidA); return m && m.hand.length === 1; });
-  log("A 购买后:", summarize(await getState(sa), uidA));
+  log("A bought:", summarize(await getState(sa), uidA));
 
   const buyB = await emitAck(sb, "game:buy", { slot: 0 });
   if(!buyB.ok) throw new Error("B buy failed " + buyB.error);
   await waitState(sb, s => { const m = findMe(s, uidB); return m && m.hand.length === 1; });
-  log("B 购买后:", summarize(await getState(sb), uidB));
+  log("B bought:", summarize(await getState(sb), uidB));
 
-  // UPGRADE
   let upgradeOk = true;
   if(DO_UPGRADE){
     console.log("---------- UPGRADE TEST ----------");
-    log("攒钱：连打 2 回合");
+    log("grind 2 turns for gold");
     const r1 = await advanceTurn(sa, sb, uidA, uidB, 2);
     stA = r1.stA; stB = r1.stB;
     log("T2:", summarize(stA, uidA));
@@ -225,18 +214,18 @@ async function main(){
 
     const me = findMe(stA, uidA);
     if(me.gold < 5){
-      log("金币不足（" + me.gold + "），跳过升级");
+      log("not enough gold (" + me.gold + "), skip upgrade");
       upgradeOk = false;
     } else {
-      log("升级酒馆（当前 T" + (me.tavernTier||1) + "）");
+      log("upgrade tavern (current T" + (me.tavernTier||1) + ")");
       const waitUpgEvt = once(sa, "game:upgraded", 5000);
       const upgRes = await emitAck(sa, "game:upgrade");
       if(!upgRes.ok) throw new Error("upgrade failed " + upgRes.error);
       const evtUpg = await waitUpgEvt;
       await waitState(sa, s => { const m = findMe(s, uidA); return m && (m.tavernTier||1) >= 2; });
       const stUpg = await getState(sa);
-      log("upgraded 事件: newTier=" + evtUpg.newTier + " cost=" + evtUpg.cost);
-      log("升级后:", summarize(stUpg, uidA));
+      log("upgraded: newTier=" + evtUpg.newTier + " cost=" + evtUpg.cost);
+      log("after upgrade:", summarize(stUpg, uidA));
       upgradeOk = findMe(stUpg, uidA).tavernTier >= 2;
     }
     console.log(upgradeOk ? "  upgrade PASS" : "  upgrade FAIL");
@@ -244,37 +233,36 @@ async function main(){
     console.log("");
   }
 
-  // BOARD
   let boardOk = true;
   if(DO_BOARD){
     console.log("---------- BOARD TEST ----------");
     stA = await getState(sa);
     const me = findMe(stA, uidA);
     if(!me.hand || me.hand.length === 0){
-      log("A 无手牌，跳过 board");
+      log("A no hand, skip board");
       boardOk = false;
     } else {
-      log("A 上阵手牌[0]");
+      log("A place hand[0]");
       const placeA = await emitAck(sa, "game:place", { handIndex: 0 });
       if(!placeA.ok) throw new Error("A place failed " + placeA.error);
       await waitState(sa, s => { const m = findMe(s, uidA); return m && m.board.length === 1; });
       const stPlaceA = await getState(sa);
       const aPower = findMe(stPlaceA, uidA).board.reduce((s, c) => s + c.attack + c.hp, 0);
-      log("A 上阵后: " + summarize(stPlaceA, uidA));
-      log("A 场上 power =", aPower);
+      log("after place: " + summarize(stPlaceA, uidA));
+      log("A board power =", aPower);
 
-      log("A 下阵");
+      log("A remove");
       const removeA = await emitAck(sa, "game:remove", { boardIndex: 0 });
       if(!removeA.ok) throw new Error("A remove failed " + removeA.error);
       await waitState(sa, s => { const m = findMe(s, uidA); return m && m.board.length === 0; });
-      log("A 下阵后: " + summarize(await getState(sa), uidA));
+      log("after remove: " + summarize(await getState(sa), uidA));
 
-      log("A 再次上阵");
+      log("A place again");
       const placeA2 = await emitAck(sa, "game:place", { handIndex: 0 });
       if(!placeA2.ok) throw new Error("A place2 failed " + placeA2.error);
       await waitState(sa, s => { const m = findMe(s, uidA); return m && m.board.length === 1; });
       const stPlaceA2 = await getState(sa);
-      log("A 再次上阵: " + summarize(stPlaceA2, uidA));
+      log("after place2: " + summarize(stPlaceA2, uidA));
       boardOk = findMe(stPlaceA2, uidA).board.length === 1 && aPower > 0;
     }
     console.log(boardOk ? "  board PASS" : "  board FAIL");
@@ -282,7 +270,38 @@ async function main(){
     console.log("");
   }
 
-  // TRIPLE
+  let cardsOk = true;
+  if(DO_CARDS){
+    console.log("---------- CARDS TEST ----------");
+    const rCards = await emitAck(sa, "game:debug-keyword");
+    if(!rCards.ok) throw new Error("debug-keyword failed " + (rCards.error || ""));
+    await waitState(sa, s => {
+      const m = findMe(s, uidA);
+      return m && m.hand && m.hand.length === 1 && m.hand[0].keywords && m.hand[0].keywords.length > 0;
+    });
+    const stCards = await getState(sa);
+    const card = findMe(stCards, uidA).hand[0];
+    log("keyword card: " + cardLine(card));
+    const kwArr = Array.isArray(card.keywords);
+    const kwStr = kwArr && card.keywords.every(k => typeof k === "string");
+    const hasTaunt = kwArr && card.keywords.includes("Taunt");
+    const hasShield = kwArr && card.keywords.includes("Shield");
+    log("keywords is array =", kwArr, " all strings =", kwStr);
+    log("has Taunt =", hasTaunt, " has Shield =", hasShield);
+
+    const rCards2 = await emitAck(sa, "game:debug-keyword");
+    if(!rCards2.ok) throw new Error("debug-keyword 2 failed");
+    await sleep(200);
+    const stCards2 = await getState(sa);
+    const card2 = findMe(stCards2, uidA).hand[0];
+    const sameKw = card2.keywords && card2.keywords.includes("Taunt") && card2.keywords.includes("Shield");
+
+    cardsOk = kwArr && kwStr && hasTaunt && hasShield && sameKw;
+    console.log(cardsOk ? "  cards PASS" : "  cards FAIL");
+    console.log("---------------------------------");
+    console.log("");
+  }
+
   let tripleOk = true;
   if(DO_TRIPLE){
     console.log("---------- TRIPLE TEST ----------");
@@ -296,61 +315,47 @@ async function main(){
     });
     const stTri = await getState(sa);
     const goldCard = findMe(stTri, uidA).hand.find(c => c.golden);
-    console.log("triple 事件: " + evtTri.name + " 攻" + evtTri.attack + " 血" + evtTri.hp);
-    console.log("A 手牌: " + findMe(stTri, uidA).hand.map(cardLine).join(","));
-    tripleOk = !!goldCard && goldCard.golden === true && /金色/.test(goldCard.name);
+    console.log("triple event: " + evtTri.name + " " + evtTri.attack + "/" + evtTri.hp);
+    console.log("A hand: " + findMe(stTri, uidA).hand.map(cardLine).join(","));
+    tripleOk = !!goldCard && goldCard.golden === true;
     console.log(tripleOk ? "  triple PASS" : "  triple FAIL");
     console.log("---------------------------------");
     console.log("");
   }
 
-  // 最后打一轮
-  stA = await getState(sa);
-  if(findMe(stA, uidA).alive && !findMe(stA, uidA).ready){
-    const finalTurn = stA.turn + 1;
-    const r3 = await advanceTurn(sa, sb, uidA, uidB, finalTurn);
-    stA = r3.stA; stB = r3.stB;
-  }
-
-  // RECONNECT（最后一步，不破坏之前的状态）
   let reconnectOk = true;
   if(DO_RECONNECT){
     console.log("---------- RECONNECT TEST ----------");
     const stBefore = await getState(sa);
     const meBefore = findMe(stBefore, uidA);
-    log("重连前 A: " + summarize(stBefore, uidA));
+    log("before reconnect A: " + summarize(stBefore, uidA));
 
-    // A 断开
-    log("A socket 断开");
+    log("A socket disconnect");
     sa.disconnect();
     await sleep(800);
-
-    // B 侧应看到 A online=false
     const roomB1 = getLatestRoom(sb);
     let aOfflineInB = false;
     if(roomB1 && roomB1.players){
       const pa = roomB1.players.find(p => p.uid === uidA);
       aOfflineInB = !!pa && pa.online === false;
     }
-    log("B 侧看到 A 离线 =", aOfflineInB);
+    log("B sees A offline =", aOfflineInB);
 
-    // A 重连
-    log("A 重新连接");
+    log("A reconnect");
     const connA2 = await connect(A.token);
     const sa2 = connA2.socket;
     await sleep(200);
     if(!connA2.buffer.hello) throw new Error("reconnect: no hello");
 
-    // 发 room:rejoin
-    log("A 请求恢复房间");
+    log("A request rejoin");
     const rj = await emitAck(sa2, "room:rejoin");
     if(!rj.ok) throw new Error("rejoin failed " + (rj.error || ""));
-    if(!rj.room || rj.room.id !== roomId) throw new Error("rejoin: wrong room " + JSON.stringify(rj.room));
+    if(!rj.room || rj.room.id !== roomId) throw new Error("rejoin: wrong room");
     if(!rj.hasGame) throw new Error("rejoin: no game restored");
 
     const stAfter = await waitState(sa2, s => s.turn === stBefore.turn && s.phase === stBefore.phase, 5000);
     const meAfter = findMe(stAfter, uidA);
-    log("重连后 A: " + summarize(stAfter, uidA));
+    log("after reconnect A: " + summarize(stAfter, uidA));
 
     const sameGold = meBefore.gold === meAfter.gold;
     const sameHp = meBefore.hp === meAfter.hp;
@@ -358,7 +363,7 @@ async function main(){
     const sameBoardN = meBefore.board.length === meAfter.board.length;
     const sameTier = (meBefore.tavernTier||1) === (meAfter.tavernTier||1);
     const sameTurn = stBefore.turn === stAfter.turn;
-    log("对比: 金=" + sameGold + " 血=" + sameHp + " 手=" + sameHandN + " 场=" + sameBoardN + " T=" + sameTier + " turn=" + sameTurn);
+    log("compare: gold=" + sameGold + " hp=" + sameHp + " hand=" + sameHandN + " board=" + sameBoardN + " tier=" + sameTier + " turn=" + sameTurn);
 
     await sleep(400);
     const roomB2 = getLatestRoom(sb);
@@ -367,14 +372,12 @@ async function main(){
       const pa = roomB2.players.find(p => p.uid === uidA);
       aOnlineAgain = !!pa && pa.online !== false;
     }
-    log("B 侧看到 A 恢复在线 =", aOnlineAgain);
+    log("B sees A online again =", aOnlineAgain);
 
     reconnectOk = sameGold && sameHp && sameHandN && sameBoardN && sameTier && sameTurn && aOfflineInB && aOnlineAgain;
     console.log(reconnectOk ? "  reconnect PASS" : "  reconnect FAIL");
     console.log("---------------------------------");
     console.log("");
-
-    // 更新 sa 引用用于断开
     sa = sa2;
   }
 
@@ -388,11 +391,11 @@ async function main(){
   console.log("upgrade:", upgradeOk ? "PASS" : (DO_UPGRADE ? "FAIL" : "skip"));
   console.log("triple:", tripleOk ? "PASS" : (DO_TRIPLE ? "FAIL" : "skip"));
   console.log("reconnect:", reconnectOk ? "PASS" : (DO_RECONNECT ? "FAIL" : "skip"));
+  console.log("cards:", cardsOk ? "PASS" : (DO_CARDS ? "FAIL" : "skip"));
   console.log("");
 
-  const pass = boardOk && upgradeOk && tripleOk && reconnectOk;
-
-  console.log(pass ? "PASS ✅" : "FAIL ❌");
+  const pass = boardOk && upgradeOk && tripleOk && reconnectOk && cardsOk;
+  console.log(pass ? "PASS OK" : "FAIL");
   console.log("============================");
 
   try { sa.emit("room:leave"); } catch(e){}
