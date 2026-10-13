@@ -10,6 +10,7 @@ import queue
 import threading
 import subprocess
 import tkinter as tk
+import tkinter.font as tkfont
 from tkinter import scrolledtext
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -19,6 +20,25 @@ os.environ.setdefault("PYTHONLEGACYWINDOWSSTDIO", "0")
 
 GAME_PORT = 3000
 FONT_MONO = ("Consolas", 10)
+
+DEFAULT_CFG = {
+    "geometry": "1100x820",
+    "title": "\u5de5\u4f5c\u53f0",
+    "header_text": "\u5de5\u4f5c\u53f0",
+    "input_label": "\u8f93\u5165\uff1a",
+    "output_label": "\u8f93\u51fa\uff1a",
+    "run_btn_text": "\u25b6 \u8fd0\u884c\u811a\u672c",
+    "paste_btn_text": "\U0001F4CB \u4ece\u526a\u8d34\u677f\u8fd0\u884c",
+    "font_ui": "Microsoft YaHei UI",
+    "size_ui": 11,
+    "font_in": "Consolas",
+    "size_in": 10,
+    "font_out": "Consolas",
+    "size_out": 10,
+    "height_in": 10,
+    "height_out": 20,
+    "btn_style": "default",
+}
 
 DEPLOY_HOST = "8.133.252.224"
 DEPLOY_USER = "root"
@@ -64,9 +84,10 @@ def normalize_eol(content, eol):
 
 
 class ButtonFlow(tk.Frame):
-    def __init__(self, parent, specs, bg="#0d0d0f"):
+    def __init__(self, parent, specs, bg="#0d0d0f", btn_style="default"):
         super().__init__(parent, bg=bg)
         self.specs = specs
+        self.btn_style = btn_style
         self._last_width = 0
         self.bind("<Configure>", self._on_resize)
         self.after(80, self._relayout)
@@ -78,13 +99,19 @@ class ButtonFlow(tk.Frame):
         self.after_idle(self._relayout)
 
     def _make_btn(self, parent, spec):
+        if getattr(self, "btn_style", "default") == "gray":
+            bg = "#2a2a2a"
+            fg = "#d0d0d0"
+        else:
+            bg = spec.get("bg", "#1c1c20")
+            fg = spec.get("fg", "#e6e6e6")
         b = tk.Button(
             parent,
             text=spec["text"],
             command=spec["cmd"],
-            bg=spec.get("bg", "#1c1c20"),
-            fg=spec.get("fg", "#e6e6e6"),
-            activebackground="#2a2a30",
+            bg=bg,
+            fg=fg,
+            activebackground="#3a3a3a" if getattr(self, "btn_style", "default") == "gray" else "#2a2a30",
             activeforeground="#fff",
             relief="flat",
             padx=10, pady=4,
@@ -137,15 +164,18 @@ class App:
         self.server_proc = None
         self.server_lock = threading.Lock()
 
-        root.title("工作台")
-        root.geometry("1100x820")
+        self.cfg = self._load_cfg()
+        self._apply_global_font()
+        root.title(self.cfg.get("title", "工作台"))
+        self._load_geometry(root)
         root.minsize(420, 500)
+        root.protocol("WM_DELETE_WINDOW", self._on_close)
         root.configure(bg="#0d0d0f")
 
         top = tk.Frame(root, bg="#0d0d0f")
         top.pack(fill=tk.X, padx=8, pady=(6, 2))
-        tk.Label(top, text="工作台", fg="#c8a15a", bg="#0d0d0f",
-                 font=("Microsoft YaHei UI", 11, "bold")).pack(side=tk.LEFT)
+        tk.Label(top, text=self.cfg.get("header_text", "工作台"), fg="#c8a15a", bg="#0d0d0f",
+                 font=(self.cfg.get("font_ui", "Microsoft YaHei UI"), self.cfg.get("size_ui", 11), "bold")).pack(side=tk.LEFT)
         self.status_label = tk.Label(top, text="服务器: 未知", fg="#888", bg="#0d0d0f")
         self.status_label.pack(side=tk.RIGHT)
 
@@ -156,39 +186,42 @@ class App:
             {"text": "typecheck", "cmd": lambda: self.run_short("npm --prefix apps/server run typecheck", "typecheck")},
             {"text": "跑 e2e", "cmd": lambda: self.run_short("node apps/server/scripts/e2e.mjs", "e2e")},
             {"text": "一键三连", "cmd": lambda: self.run_short("node apps/server/scripts/e2e.mjs --triple", "triple")},
-            {"text": "\U0001F310 线上 e2e", "cmd": lambda: self.run_short("set URL=" + ONLINE_URL + "&& node apps/server/scripts/e2e.mjs", "online"), "bg": "#3d5a5a", "fg": "#a6e0e0"},
-            {"text": "🌐 线上全测", "cmd": lambda: self.run_short("set URL=" + ONLINE_URL + "&& node apps/server/scripts/e2e.mjs --full", "online"), "bg": "#3d5a5a", "fg": "#a6e0e0"},
+            {"text": "线上 e2e", "cmd": lambda: self.run_short("set URL=" + ONLINE_URL + "&& node apps/server/scripts/e2e.mjs", "online"), "bg": "#3d5a5a", "fg": "#a6e0e0"},
+            {"text": "线上全测", "cmd": lambda: self.run_short("set URL=" + ONLINE_URL + "&& node apps/server/scripts/e2e.mjs --full", "online"), "bg": "#3d5a5a", "fg": "#a6e0e0"},
             {"text": "本地全测", "cmd": lambda: self.run_short("node apps/server/scripts/e2e.mjs --full", "full"), "bg": "#3d5a5a", "fg": "#a6e0e0"},
-            {"text": "\U0001F4BE git 提交", "cmd": self.git_commit, "bg": "#2d4d5a", "fg": "#a6d8ff"},
-            {"text": "\U0001F680 部署到线上", "cmd": self.deploy_online, "bg": "#5a3d2d", "fg": "#ffd6a6"},
+            {"text": "git 提交", "cmd": self.git_commit, "bg": "#2d4d5a", "fg": "#a6d8ff"},
+            {"text": "部署到线上", "cmd": self.deploy_online, "bg": "#5a3d2d", "fg": "#ffd6a6"},
             {"text": "清日志", "cmd": self.clear_logs},
             {"text": "复制日志", "cmd": self.copy_logs},
+            {"text": "设置", "cmd": self._open_settings, "bg": "#4d3d5a", "fg": "#d8c8ff"},
         ]
-        self.btn_flow = ButtonFlow(root, specs, bg="#0d0d0f")
+        self.btn_flow = ButtonFlow(root, specs, bg="#0d0d0f", btn_style=self.cfg.get("btn_style", "default"))
         self.btn_flow.pack(fill=tk.X, padx=8, pady=(2, 6))
 
-        tk.Label(root, text="指令区（可手动粘贴，或点下方「📋 从剪贴板运行」自动填入并执行）：",
+        tk.Label(root, text=self.cfg.get("input_label", "输入："),
                  anchor="w", fg="#c8a15a", bg="#0d0d0f").pack(fill=tk.X, padx=8, pady=(4, 0))
 
         self.input_box = scrolledtext.ScrolledText(
-            root, height=10, font=FONT_MONO,
+            root, height=self.cfg.get("height_in", 10),
+            font=(self.cfg.get("font_in", "Consolas"), self.cfg.get("size_in", 10)),
             bg="#050507", fg="#c8a15a", insertbackground="#c8a15a",
             relief="flat", highlightthickness=1, highlightbackground="#1e1e22")
         self.input_box.pack(fill=tk.BOTH, expand=False, padx=8, pady=4)
+        self._hide_scrollbar(self.input_box)
 
         actions = tk.Frame(root, bg="#0d0d0f")
         actions.pack(fill=tk.X, padx=8)
 
-        run_btn = tk.Button(actions, text="▶ 运行脚本", command=self.smart_run,
+        run_btn = tk.Button(actions, text=self.cfg.get("run_btn_text", "运行脚本"), command=self.smart_run,
                             bg="#3d7d3d", fg="#fff", activebackground="#4d8d4d",
                             relief="flat", padx=16, pady=6, cursor="hand2",
-                            font=("Microsoft YaHei UI", 11, "bold"))
+                            font=(self.cfg.get("font_ui", "Microsoft YaHei UI"), self.cfg.get("size_ui", 11), "bold"))
         run_btn.pack(side=tk.LEFT, padx=2, pady=4)
 
-        paste_btn = tk.Button(actions, text="📋 从剪贴板运行", command=self.run_from_clipboard,
+        paste_btn = tk.Button(actions, text=self.cfg.get("paste_btn_text", "从剪贴板运行"), command=self.run_from_clipboard,
                               bg="#3d5d7d", fg="#fff", activebackground="#4d6d8d",
                               relief="flat", padx=16, pady=6, cursor="hand2",
-                              font=("Microsoft YaHei UI", 11, "bold"))
+                              font=(self.cfg.get("font_ui", "Microsoft YaHei UI"), self.cfg.get("size_ui", 11), "bold"))
         paste_btn.pack(side=tk.LEFT, padx=2, pady=4)
 
         actions2 = tk.Frame(root, bg="#0d0d0f")
@@ -200,21 +233,242 @@ class App:
                        activebackground="#0d0d0f", selectcolor="#1c1c20",
                        highlightthickness=0).pack(side=tk.LEFT, pady=2)
 
+        actions3 = tk.Frame(root, bg="#0d0d0f")
+        actions3.pack(fill=tk.X, padx=8)
+
+        self.clear_before = tk.BooleanVar(value=True)
+        tk.Checkbutton(actions3, text="每次运行前清空输出框",
+                       variable=self.clear_before, bg="#0d0d0f", fg="#aaa",
+                       activebackground="#0d0d0f", selectcolor="#1c1c20",
+                       highlightthickness=0).pack(side=tk.LEFT, pady=2)
+
         self.apply_msg = tk.Label(actions2, text="", fg="#8cf", bg="#0d0d0f")
         self.apply_msg.pack(side=tk.LEFT, padx=8)
 
-        tk.Label(root, text="输出：", anchor="w", fg="#c8a15a", bg="#0d0d0f").pack(
+        tk.Label(root, text=self.cfg.get("output_label", "输出："), anchor="w", fg="#c8a15a", bg="#0d0d0f").pack(
             fill=tk.X, padx=8, pady=(6, 0))
 
         self.output_box = scrolledtext.ScrolledText(
-            root, height=20, font=FONT_MONO,
+            root, height=self.cfg.get("height_out", 20),
+            font=(self.cfg.get("font_out", "Consolas"), self.cfg.get("size_out", 10)),
             bg="#050507", fg="#7fd67f", insertbackground="#7fd67f",
             relief="flat", highlightthickness=1, highlightbackground="#1e1e22")
         self.output_box.pack(fill=tk.BOTH, expand=True, padx=8, pady=4)
+        self._hide_scrollbar(self.output_box)
 
         self._poll_logs()
         self.root.after(300, self.start_server)
         self.root.after(700, self.load_clipboard_to_input)
+
+    def _apply_global_font(self):
+        family = self.cfg.get("font_ui", "Microsoft YaHei UI")
+        size = self.cfg.get("size_ui", 11)
+        for name in ("TkDefaultFont", "TkTextFont", "TkMenuFont", "TkHeadingFont", "TkCaptionFont", "TkSmallCaptionFont", "TkIconFont", "TkTooltipFont"):
+            try:
+                tkfont.nametofont(name).configure(family=family, size=size)
+            except Exception:
+                pass
+
+    def _load_cfg(self):
+        cfg = dict(DEFAULT_CFG)
+        try:
+            with open(self._config_path(), "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                cfg.update(data)
+        except Exception:
+            pass
+        return cfg
+
+    def _save_cfg(self):
+        try:
+            with open(self._config_path(), "w", encoding="utf-8") as f:
+                json.dump(self.cfg, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            log_queue.put("[err] save cfg: " + str(e))
+
+    def _open_settings(self):
+        if getattr(self, "_settings_win", None) and self._settings_win.winfo_exists():
+            self._settings_win.lift()
+            return
+        win = tk.Toplevel(self.root)
+        self._settings_win = win
+        win.title("\u8bbe\u7f6e")
+        win.configure(bg="#0d0d0f")
+        win.geometry("620x700")
+        win.transient(self.root)
+
+        # 底部按钮区（固定）
+        btns = tk.Frame(win, bg="#0d0d0f")
+        btns.pack(side=tk.BOTTOM, fill=tk.X, padx=12, pady=12)
+        btns2 = tk.Frame(win, bg="#0d0d0f")
+        btns2.pack(side=tk.BOTTOM, fill=tk.X, padx=12, pady=(0, 4))
+        msg_label = tk.Label(btns2, text="", fg="#8cf", bg="#0d0d0f")
+        msg_label.pack(side=tk.LEFT)
+
+        # 可滚动区域
+        scroll_wrap = tk.Frame(win, bg="#0d0d0f")
+        scroll_wrap.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        canvas = tk.Canvas(scroll_wrap, bg="#0d0d0f", highlightthickness=0, bd=0)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        vbar = tk.Scrollbar(scroll_wrap, orient="vertical", command=canvas.yview, width=8)
+        vbar.pack(side=tk.RIGHT, fill=tk.Y)
+        canvas.configure(yscrollcommand=vbar.set)
+
+        inner = tk.Frame(canvas, bg="#0d0d0f")
+        win_id = canvas.create_window((0, 0), window=inner, anchor="nw")
+
+        def _on_inner_config(event):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+        inner.bind("<Configure>", _on_inner_config)
+
+        def _on_canvas_config(event):
+            canvas.itemconfigure(win_id, width=event.width)
+        canvas.bind("<Configure>", _on_canvas_config)
+
+        def _on_wheel(event):
+            try:
+                delta = int(-1 * (event.delta / 120)) if abs(event.delta) >= 120 else (-1 if event.delta > 0 else 1)
+            except Exception:
+                delta = 0
+            canvas.yview_scroll(delta, "units")
+        win.bind("<MouseWheel>", _on_wheel)
+        canvas.bind("<MouseWheel>", _on_wheel)
+        inner.bind("<MouseWheel>", _on_wheel)
+
+        def row(label, key):
+            f = tk.Frame(inner, bg="#0d0d0f")
+            f.pack(fill=tk.X, padx=12, pady=3)
+            tk.Label(f, text=label, fg="#c8a15a", bg="#0d0d0f", width=14, anchor="w").pack(side=tk.LEFT)
+            var = tk.StringVar(value=str(self.cfg.get(key, DEFAULT_CFG.get(key, ""))))
+            tk.Entry(f, textvariable=var, bg="#0a0a0c", fg="#e6e6e6", insertbackground="#c8a15a",
+                     relief="flat", highlightthickness=1, highlightbackground="#2d2d33").pack(
+                side=tk.LEFT, fill=tk.X, expand=True)
+            return var
+
+        tk.Label(inner, text="\u5de5\u4f5c\u53f0\u8bbe\u7f6e", fg="#c8a15a", bg="#0d0d0f",
+                 font=("Microsoft YaHei UI", 13, "bold")).pack(pady=(12, 4))
+
+        tk.Label(inner, text="\u6587\u672c", fg="#888", bg="#0d0d0f", anchor="w").pack(fill=tk.X, padx=12, pady=(10, 0))
+        v_title = row("\u7a97\u53e3\u6807\u9898", "title")
+        v_header = row("\u9876\u90e8\u6807\u9898", "header_text")
+        v_inlabel = row("\u8f93\u5165\u6846\u63d0\u793a", "input_label")
+        v_outlabel = row("\u8f93\u51fa\u6846\u63d0\u793a", "output_label")
+        v_runbtn = row("\u8fd0\u884c\u6309\u94ae\u6587\u5b57", "run_btn_text")
+        v_pastebtn = row("\u526a\u8d34\u677f\u6309\u94ae\u6587\u5b57", "paste_btn_text")
+
+        tk.Label(inner, text="\u5b57\u4f53", fg="#888", bg="#0d0d0f", anchor="w").pack(fill=tk.X, padx=12, pady=(10, 0))
+        v_fontui = row("\u754c\u9762\u5b57\u4f53", "font_ui")
+        v_sizeui = row("\u754c\u9762\u5b57\u53f7", "size_ui")
+        v_fontin = row("\u8f93\u5165\u6846\u5b57\u4f53", "font_in")
+        v_sizein = row("\u8f93\u5165\u6846\u5b57\u53f7", "size_in")
+        v_fontout = row("\u8f93\u51fa\u6846\u5b57\u4f53", "font_out")
+        v_sizeout = row("\u8f93\u51fa\u6846\u5b57\u53f7", "size_out")
+
+        tk.Label(inner, text="\u5e03\u5c40", fg="#888", bg="#0d0d0f", anchor="w").pack(fill=tk.X, padx=12, pady=(10, 0))
+        v_hin = row("\u8f93\u5165\u6846\u884c\u6570", "height_in")
+        v_hout = row("\u8f93\u51fa\u6846\u884c\u6570", "height_out")
+
+        tk.Label(inner, text="\u6309\u94ae\u98ce\u683c", fg="#888", bg="#0d0d0f", anchor="w").pack(fill=tk.X, padx=12, pady=(10, 0))
+        v_style = tk.StringVar(value=self.cfg.get("btn_style", "default"))
+        sf = tk.Frame(inner, bg="#0d0d0f")
+        sf.pack(fill=tk.X, padx=12, pady=3)
+        tk.Radiobutton(sf, text="\u591a\u5f69", variable=v_style, value="default",
+                       bg="#0d0d0f", fg="#e6e6e6", selectcolor="#1c1c20",
+                       activebackground="#0d0d0f", activeforeground="#c8a15a").pack(side=tk.LEFT)
+        tk.Radiobutton(sf, text="\u5168\u7070", variable=v_style, value="gray",
+                       bg="#0d0d0f", fg="#e6e6e6", selectcolor="#1c1c20",
+                       activebackground="#0d0d0f", activeforeground="#c8a15a").pack(side=tk.LEFT, padx=16)
+
+        tk.Frame(inner, bg="#0d0d0f", height=20).pack()
+
+        def to_int(v, default):
+            try:
+                return int(v)
+            except Exception:
+                return default
+
+        def apply():
+            self.cfg["title"] = v_title.get()
+            self.cfg["header_text"] = v_header.get()
+            self.cfg["input_label"] = v_inlabel.get()
+            self.cfg["output_label"] = v_outlabel.get()
+            self.cfg["run_btn_text"] = v_runbtn.get()
+            self.cfg["paste_btn_text"] = v_pastebtn.get()
+            self.cfg["font_ui"] = v_fontui.get()
+            self.cfg["size_ui"] = to_int(v_sizeui.get(), 11)
+            self.cfg["font_in"] = v_fontin.get()
+            self.cfg["size_in"] = to_int(v_sizein.get(), 10)
+            self.cfg["font_out"] = v_fontout.get()
+            self.cfg["size_out"] = to_int(v_sizeout.get(), 10)
+            self.cfg["height_in"] = to_int(v_hin.get(), 10)
+            self.cfg["height_out"] = to_int(v_hout.get(), 20)
+            self.cfg["btn_style"] = v_style.get()
+            self._save_cfg()
+            msg_label.config(text="\u5df2\u4fdd\u5b58\uff0c\u91cd\u542f\u751f\u6548")
+            self.root.after(2500, lambda: msg_label.config(text=""))
+
+        tk.Button(btns, text="\u53d6\u6d88", command=win.destroy, bg="#1c1c20", fg="#e6e6e6",
+                  relief="flat", padx=20, pady=6, cursor="hand2").pack(side=tk.RIGHT, padx=4)
+        tk.Button(btns, text="\u5e94\u7528", command=apply, bg="#3d7d3d", fg="#fff",
+                  relief="flat", padx=20, pady=6, cursor="hand2").pack(side=tk.RIGHT, padx=4)
+
+    def _hide_scrollbar(self, st):
+        try:
+            if hasattr(st, "vbar") and st.vbar is not None:
+                st.vbar.pack_forget()
+                try:
+                    st.vbar.config(width=0)
+                except Exception:
+                    pass
+                return
+            for child in st.master.winfo_children():
+                if isinstance(child, tk.Scrollbar):
+                    child.pack_forget()
+        except Exception:
+            pass
+
+    def _config_path(self):
+        return os.path.join(os.path.dirname(os.path.abspath(__file__)), ".workbench.json")
+
+    def _load_geometry(self, root):
+        default = "1100x820"
+        try:
+            with open(self._config_path(), "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+            geo = cfg.get("geometry")
+            if isinstance(geo, str) and re.match(r"^\d+x\d+([+-]\d+[+-]\d+)?$", geo):
+                root.geometry(geo)
+                return
+        except Exception:
+            pass
+        root.geometry(default)
+
+    def _save_geometry(self):
+        try:
+            st = self.root.state()
+            if st == "zoomed":
+                return
+            self.cfg["geometry"] = self.root.geometry()
+            self._save_cfg()
+        except Exception:
+            pass
+
+    def _on_close(self):
+        self._save_geometry()
+        try:
+            if self.server_proc:
+                self.server_proc.terminate()
+        except Exception:
+            pass
+        self.root.destroy()
+
+    def _clear_output_if_needed(self):
+        try:
+            if self.clear_before.get():
+                self.output_box.delete("1.0", tk.END)
+        except Exception:
+            pass
 
     def _poll_logs(self):
         try:
@@ -236,7 +490,12 @@ class App:
         self.output_box.tag_config("ok", foreground="#7fd67f")
         self.output_box.tag_config("dev", foreground="#666")
         self.output_box.tag_config("apply", foreground="#8cf")
-        self.output_box.see(tk.END)
+        try:
+            y1 = self.output_box.yview()[1]
+            if y1 >= 0.999:
+                self.output_box.see(tk.END)
+        except Exception:
+            pass
         self.root.after(80, self._poll_logs)
 
     def clear_logs(self):
@@ -333,6 +592,7 @@ class App:
         self.root.after(600, self.start_server)
 
     def run_short(self, cmdline, tag):
+        self._clear_output_if_needed()
         def worker():
             log_queue.put("[dev] 执行 " + tag)
             try:
@@ -352,6 +612,7 @@ class App:
         threading.Thread(target=worker, daemon=True).start()
 
     def deploy_online(self):
+        self._clear_output_if_needed()
         if getattr(self, "_deploying", False):
             log_queue.put("[deploy] 已有部署在跑，忽略本次点击")
             return
@@ -445,11 +706,88 @@ class App:
             log_queue.put("[err] deploy: " + str(e))
 
     def git_commit(self):
-        threading.Thread(target=self._git_commit_worker, daemon=True).start()
+        self._open_git_dialog()
 
-    def _git_commit_worker(self):
+    def _open_git_dialog(self):
+        if getattr(self, "_git_dlg", None) and self._git_dlg.winfo_exists():
+            self._git_dlg.lift()
+            return
         import datetime
-        msg = "chore: auto commit " + datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        win = tk.Toplevel(self.root)
+        self._git_dlg = win
+        win.title("git \u63d0\u4ea4")
+        win.configure(bg="#0d0d0f")
+        win.geometry("560x300")
+        win.transient(self.root)
+        win.grab_set()
+
+        tk.Label(win, text="\u63d0\u4ea4\u4fe1\u606f", fg="#c8a15a", bg="#0d0d0f",
+                 font=("Microsoft YaHei UI", 12, "bold")).pack(pady=(14, 6), anchor="w", padx=14)
+
+        clip_msg = (self.read_clipboard() or "").strip()
+        if clip_msg and "\n" not in clip_msg and len(clip_msg) <= 200:
+            default_msg = clip_msg
+        else:
+            default_msg = "chore: " + datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+        var = tk.StringVar(value=default_msg)
+        entry = tk.Entry(win, textvariable=var, bg="#0a0a0c", fg="#e6e6e6",
+                         insertbackground="#c8a15a", relief="flat",
+                         highlightthickness=1, highlightbackground="#2d2d33",
+                         font=(self.cfg.get("font_in", "Consolas"), self.cfg.get("size_in", 10)))
+        entry.pack(fill=tk.X, padx=14, pady=(0, 8))
+        entry.focus_set()
+        try:
+            entry.selection_range(0, tk.END)
+        except Exception:
+            pass
+
+        tk.Label(win, text="\u5feb\u6377\u524d\u7f00", fg="#888", bg="#0d0d0f",
+                 anchor="w").pack(fill=tk.X, padx=14, pady=(4, 0))
+
+        prefixes = ["feat", "fix", "chore", "docs", "refactor", "test", "style", "perf"]
+        pf = tk.Frame(win, bg="#0d0d0f")
+        pf.pack(fill=tk.X, padx=14, pady=(4, 8))
+
+        def set_prefix(p):
+            var.set(p + ": ")
+            entry.icursor(tk.END)
+            entry.focus_set()
+
+        for i, pre in enumerate(prefixes):
+            btn = tk.Button(pf, text=pre, command=(lambda p=pre: set_prefix(p)),
+                            bg="#1c1c20", fg="#e6e6e6", activebackground="#2a2a30",
+                            relief="flat", padx=8, pady=2, cursor="hand2")
+            btn.pack(side=tk.LEFT, padx=2, pady=2)
+
+        msg_label = tk.Label(win, text="", fg="#8cf", bg="#0d0d0f")
+        msg_label.pack(fill=tk.X, padx=14, pady=(4, 0))
+
+        def do_commit():
+            m = var.get().strip()
+            if not m:
+                msg_label.config(text="\u63d0\u4ea4\u4fe1\u606f\u4e0d\u80fd\u4e3a\u7a7a", fg="#e88")
+                return
+            self._clear_output_if_needed()
+            threading.Thread(target=self._git_commit_worker, args=(m,), daemon=True).start()
+            win.destroy()
+
+        def cancel():
+            win.destroy()
+
+        btn_row = tk.Frame(win, bg="#0d0d0f")
+        btn_row.pack(fill=tk.X, padx=14, pady=(8, 14), side=tk.BOTTOM)
+        tk.Button(btn_row, text="\u53d6\u6d88", command=cancel, bg="#1c1c20", fg="#e6e6e6",
+                  relief="flat", padx=20, pady=6, cursor="hand2").pack(side=tk.RIGHT, padx=4)
+        tk.Button(btn_row, text="\u63d0\u4ea4", command=do_commit, bg="#3d7d3d", fg="#fff",
+                  relief="flat", padx=20, pady=6, cursor="hand2").pack(side=tk.RIGHT, padx=4)
+
+        win.bind("<Return>", lambda e: do_commit())
+        win.bind("<Escape>", lambda e: cancel())
+
+    def _git_commit_worker(self, msg=None):
+        import datetime
+        if not msg:
+            msg = "chore: auto commit " + datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         def run_step(cmdline):
             log_queue.put("[git] $ " + cmdline)
@@ -481,11 +819,33 @@ class App:
         except Exception as e:
             log_queue.put("[err] git: " + str(e))
 
+    def _latest_patch_from_output(self):
+        try:
+            txt = self.output_box.get("1.0", tk.END)
+        except Exception:
+            return None
+        candidates = []
+        for line in txt.splitlines():
+            m = re.search(r"\[apply\] OK (tools/patch-[\w\-]+\.py)", line)
+            if m:
+                candidates.append(m.group(1))
+        if not candidates:
+            return None
+        return candidates[-1]
+
     def smart_run(self):
-        text = self.input_box.get("1.0", tk.END)
-        if not text.strip():
-            self.apply_msg.config(text="空内容")
-            return
+        text = self.input_box.get("1.0", tk.END).strip()
+        if not text:
+            latest = self._latest_patch_from_output()
+            if latest:
+                text = latest
+                self.input_box.delete("1.0", tk.END)
+                self.input_box.insert("1.0", text)
+                log_queue.put("[dev] 输入框为空，用输出框最近补丁: " + text)
+            else:
+                self.apply_msg.config(text="空内容，输出框也没找到 patch")
+                return
+        self._clear_output_if_needed()
         self.apply_msg.config(text="执行中...")
         threading.Thread(target=self._smart_run_worker, args=(text,), daemon=True).start()
 

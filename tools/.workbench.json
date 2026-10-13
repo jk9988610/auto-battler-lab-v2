@@ -1,0 +1,18 @@
+{
+  "geometry": "420x683+507+197",
+  "title": "",
+  "header_text": "工作台",
+  "input_label": "输入：",
+  "output_label": "输出：",
+  "run_btn_text": "运行脚本",
+  "paste_btn_text": "从剪贴板运行",
+  "font_ui": "Microsoft YaHei UI",
+  "size_ui": 10,
+  "font_in": "Consolas",
+  "size_in": 10,
+  "font_out": "Consolas",
+  "size_out": 10,
+  "height_in": 5,
+  "height_out": 10,
+  "btn_style": "gray"
+}
