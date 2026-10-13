@@ -503,18 +503,13 @@ export function playerEndTurn(
   if (!p.alive) return { ok: false, error: "eliminated" };
   p.ready = true;
 
-  // \u6240\u6709\u771f\u4eba\u90fd\u7ed3\u675f\u540e\uff0c\u8ba9 AI \u884c\u52a8\u5e76 ready
-  const allHumansReady = g.players.every(function (x) {
-    return !x.alive || x.isAI || x.ready;
+  // \u7acb\u5373\u8ba9\u672a ready \u7684 AI \u884c\u52a8\u5e76 ready
+  g.players.forEach(function (x) {
+    if (x.isAI && x.alive && !x.ready) {
+      runAITurn(g, x);
+      x.ready = true;
+    }
   });
-  if (allHumansReady) {
-    g.players.forEach(function (x) {
-      if (x.isAI && x.alive && !x.ready) {
-        runAITurn(g, x);
-        x.ready = true;
-      }
-    });
-  }
 
   const allReady = g.players.every(function (x) { return !x.alive || x.ready; });
   if (!allReady) return { ok: true, state: g };

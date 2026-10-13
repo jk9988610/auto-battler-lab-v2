@@ -145,7 +145,6 @@ async function main(){
 
   if(DO_AI){
     console.log("---------- AI TEST ----------");
-    // \\u68c0\\u67e5 8 \\u4eba + 7 AI
     const players = stA.players;
     const aiCount = players.filter(p => p.isAI).length;
     const humanCount = players.filter(p => !p.isAI).length;
@@ -153,7 +152,6 @@ async function main(){
     const aiNames = players.filter(p => p.isAI).map(p => p.username).sort();
     log("AI names:", aiNames.join(", "));
 
-    // \\u9a8c\\u8bc1\\uff1a8 \\u4eba\\uff0c2 \\u771f\\u4eba\\uff0c6 AI
     const eightOk = players.length === 8;
     const twoHuman = humanCount === 2;
     const sixAI = aiCount === 6;
@@ -162,8 +160,11 @@ async function main(){
     log("8 players =", eightOk, " 2 human =", twoHuman, " 6 AI =", sixAI);
     log("AI names look right =", namesOk);
 
-    // \\u771f\\u4eba A \\u7ed3\\u675f\\u56de\\u5408\\uff0cAI \\u5e94\\u8be5\\u81ea\\u52a8 ready
-    // \\u4f46 B \\u8fd8\\u672a ready\\uff0c\\u6240\\u4ee5\\u8fd8\\u4e0d\\u4f1a\\u89e6\\u53d1\\u6218\\u6597
+    // T1 \u521d\u59cb\uff1aAI \u5e94\u8be5\u8fd8\u6ca1\u884c\u52a8\uff08board=0 hand=0 gold=3\uff09
+    const aiInitEmpty = stA.players.filter(p => p.isAI).every(p => p.board.length === 0 && p.hand.length === 0);
+    log("T1 init: AI board/hand empty =", aiInitEmpty);
+
+    // A endTurn\uff08\u4e0d\u89e6\u53d1\u6218\u6597\uff0c\u56e0\u4e3a B \u8fd8\u6ca1 ready\uff09
     const endA = await emitAck(sa, "game:endTurn");
     if(!endA.ok) throw new Error("A endTurn failed");
     await sleep(300);
@@ -173,27 +174,49 @@ async function main(){
     const bReady = findMe(stMid, uidB).ready;
     log("after A endTurn: A ready=" + aReady + " B ready=" + bReady + " AI all ready=" + aiAllReady);
 
-    // B \\u7ed3\\u675f\\uff0c\\u89e6\\u53d1\\u6218\\u6597
+    // \u68c0\u67e5 AI \u662f\u5426\u4e70\u4e86\u5361\u4e0a\u4e86\u9635\uff08\u6b64\u65f6 A \u5df2 ready\uff0cAI \u5df2\u884c\u52a8\uff09
+    const aiAfter = stMid.players.filter(p => p.isAI);
+    const aiBoardSum = aiAfter.reduce((sum, p) => sum + p.board.length, 0);
+    const aiHandSum = aiAfter.reduce((sum, p) => sum + p.hand.length, 0);
+    const aiGoldSum = aiAfter.reduce((sum, p) => sum + p.gold, 0);
+    log("AI after T1: board sum =", aiBoardSum, " hand sum =", aiHandSum, " gold sum =", aiGoldSum);
+
+    // \u6bcf\u4e2a AI \u5e94\u8be5\u81f3\u5c11\u4e0a\u9635 1 \u5f20\uff083\u91d1\u4e70\u4e00\u5f20\uff0c\u4e0a\u4e00\u5f20\uff09
+    const aiAllHaveBoard = aiAfter.every(p => p.board.length >= 1);
+    log("every AI has >=1 on board =", aiAllHaveBoard);
+    log("sample AI detail:", aiAfter.map(p => p.username + "=" + p.board.length + "/" + p.hand.length + "/" + p.gold).join(" "));
+
+    // B endTurn\uff0c\u89e6\u53d1\u6218\u6597
     const wb = once(sa, "game:battle", 10000);
     const endB = await emitAck(sb, "game:endTurn");
     if(!endB.ok) throw new Error("B endTurn failed");
     const battle = await wb;
     log("battle pairings =", battle.pairings.length, " (expect 4 for 8 players)");
 
-    // \\u6218\\u6597\\u540e\\u56de\\u5230 T2\\uff0cAI \\u5e94\\u8be5 ready=false
+    // \u6218\u6597\u540e T2
     await sleep(400);
     const stT2 = await getState(sa);
     const aiReadyAfterBattle = stT2.players.filter(p => p.isAI).every(p => p.ready === false);
     log("T2: AI ready reset =", aiReadyAfterBattle, " turn =", stT2.turn);
 
-    aiOk = eightOk && twoHuman && sixAI && namesOk && aiAllReady && aReady
-        && battle.pairings.length === 4 && stT2.turn === 2 && aiReadyAfterBattle;
+    // A endTurn \u4e00\u6b21\u770b AI \u7b2c\u4e8c\u56de\u5408\u52a8\u4f5c
+    const endA2 = await emitAck(sa, "game:endTurn");
+    if(!endA2.ok) throw new Error("A T2 endTurn failed");
+    await sleep(300);
+    const stT2mid = await getState(sa);
+    const aiT2 = stT2mid.players.filter(p => p.isAI);
+    const aiBoardSumT2 = aiT2.reduce((sum, p) => sum + p.board.length, 0);
+    const aiTierSumT2 = aiT2.reduce((sum, p) => sum + (p.tavernTier || 1), 0);
+    log("AI after T2: board sum =", aiBoardSumT2);
+
+    aiOk = eightOk && twoHuman && sixAI && namesOk && aiInitEmpty && aiAllReady && aReady
+        && aiAllHaveBoard && battle.pairings.length === 4 && stT2.turn === 2 && aiReadyAfterBattle;
     console.log(aiOk ? "  ai PASS" : "  ai FAIL");
     console.log("---------------------------------");
     console.log("");
   }
 
-  // \\u57fa\\u7840\\u6d41\\u7a0b\\u6d4b\\u8bd5\\uff08\\u4ec5\\u5f53\\u4e0d\\u662f --ai \\u6a21\\u5f0f\\u65f6\\uff09
+
   if(!DO_AI){
     // \\u5404\\u4e70 1 \\u5f20
     const buyA = await emitAck(sa, "game:buy", { slot: 0 });
