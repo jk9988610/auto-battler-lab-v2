@@ -22,6 +22,7 @@ export interface PlayerState {
   hand: Card[];
   board: Card[];
   tavernTier: number;
+  isAI?: boolean;
 }
 
 export interface GameState {
@@ -207,7 +208,7 @@ function mergeTriplesHand(p: PlayerState): Card[] {
 
 const games = new Map<string, GameState>();
 
-export function startGame(roomId: string, players: { uid: number; username: string }[]): GameState {
+export function startGame(roomId: string, players: { uid: number; username: string; isAI?: boolean }[]): GameState {
   const state: GameState = {
     roomId: roomId,
     turn: 1,
@@ -225,6 +226,7 @@ export function startGame(roomId: string, players: { uid: number; username: stri
         hand: [],
         board: [],
         tavernTier: 1,
+        isAI: !!p.isAI,
       };
     }),
     createdAt: Date.now(),
@@ -466,6 +468,11 @@ export function playerEndTurn(
   if (!p) return { ok: false, error: "not in game" };
   if (!p.alive) return { ok: false, error: "eliminated" };
   p.ready = true;
+
+  // AI \u81ea\u52a8 ready
+  g.players.forEach(function (x) {
+    if (x.isAI && x.alive) x.ready = true;
+  });
 
   const allReady = g.players.every(function (x) { return !x.alive || x.ready; });
   if (!allReady) return { ok: true, state: g };

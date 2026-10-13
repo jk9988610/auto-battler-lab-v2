@@ -138,8 +138,15 @@ export function attachSocket(http: HttpServer) {
       if (result.room) {
         const room = result.room;
         const players = room.players.map(function (p) {
-          return { uid: p.uid, username: p.username };
+          return { uid: p.uid, username: p.username, isAI: false };
         });
+        // \u8865 AI \u5230 8 \u4eba
+        const MAX = 8;
+        let aiIdx = 1;
+        while (players.length < MAX) {
+          players.push({ uid: -aiIdx, username: "AI-" + aiIdx, isAI: true });
+          aiIdx += 1;
+        }
         const state = Games.startGame(room.id, players);
         broadcastRoom(room);
         io.to(room.id).emit("room:started", { roomId: room.id });
