@@ -220,21 +220,25 @@ function shuffle<T>(arr: T[]): T[] {
 
 function mergeTriplesHand(p: PlayerState): Card[] {
   const merged: Card[] = [];
+  // \u5408\u5e76 hand + board \u91cc\u6240\u6709\u975e\u91d1\u5361
+  const all: Card[] = [];
+  p.hand.forEach(function (c) { if (!c.golden) all.push(c); });
+  p.board.forEach(function (c) { if (!c.golden) all.push(c); });
+
   const groups = new Map<string, Card[]>();
-  p.hand.forEach(function (c) {
-    if (c.golden) return;
+  all.forEach(function (c) {
     const key = c.name + "#" + c.tier;
     if (!groups.has(key)) groups.set(key, []);
-    const arr = groups.get(key)!;
-    arr.push(c);
+    groups.get(key)!.push(c);
   });
+
   groups.forEach(function (arr) {
     while (arr.length >= 3) {
       const triple = arr.splice(0, 3);
       const base = triple[0];
       const golden: Card = {
         id: Math.random().toString(36).slice(2, 8),
-        name: "金色" + base.name,
+        name: "\u91d1\u8272" + base.name,
         tier: base.tier,
         attack: base.attack * 2,
         hp: base.hp * 2,
@@ -242,6 +246,7 @@ function mergeTriplesHand(p: PlayerState): Card[] {
       };
       const removeIds = triple.map(function (x) { return x.id; });
       p.hand = p.hand.filter(function (x) { return removeIds.indexOf(x.id) < 0; });
+      p.board = p.board.filter(function (x) { return removeIds.indexOf(x.id) < 0; });
       p.hand.push(golden);
       merged.push(golden);
     }
@@ -492,17 +497,36 @@ function runBattle(g: GameState): BattleResult {
 function runAITurn(g: GameState, ai: PlayerState): void {
   if (!ai.alive) return;
 
-  // 1. \u82e5\u91d1\u5e01\u8db3\u591f\u4e14\u80fd\u7559\u4e0b 3 \u91d1\u4e70\u724c\uff0c\u5148\u5347\u7ea7
+  // 0. \u7edf\u8ba1\u6bcf\u4e2a (name#tier) \u7684\u6570\u91cf
+  const score = (c: Card) => (c.attack + c.hp) + (c.tier || 1) * 2;
+
+  const counts = new Map<string, number>();
+  const addCount = (c: Card) => {
+    const key = c.name + "#" + c.tier;
+    counts.set(key, (counts.get(key) || 0) + 1);
+  };
+  ai.hand.forEach(addCount);
+  ai.board.forEach(addCount);
+  const tripleReady = new Set<string>();
+  counts.forEach((n, k) => { if (n >= 2) tripleReady.add(k); });
+  const isTripleCard = (c: Card) => tripleReady.has(c.name + "#" + c.tier);
+
+  const safeHp = ai.hp > 25;
+  const criticalHp = ai.hp < 15;
+
+  // 1. \u5347\u7ea7\uff08\u6309\u98ce\u683c + \u8840\u91cf\uff09
   if (ai.tavernTier < MAX_TIER) {
     const cost = UPGRADE_COST[ai.tavernTier];
     const style = ai.aiStyle || "standard";
     let shouldUpgrade = false;
-    if (style === "aggressive") {
-      shouldUpgrade = ai.gold >= cost;
-    } else if (style === "conservative") {
-      shouldUpgrade = ai.gold >= cost && ai.board.length >= 4;
+    if (criticalHp) {
+      shouldUpgrade = false;
+    } else if (safeHp) {
+      if (style === "aggressive") shouldUpgrade = ai.gold >= cost;
+      else if (style === "conservative") shouldUpgrade = ai.gold >= cost + 3 && ai.board.length >= 4;
+      else shouldUpgrade = ai.gold >= cost && ai.board.length >= 3;
     } else {
-      shouldUpgrade = ai.gold >= cost && ai.board.length >= 3;
+      shouldUpgrade = ai.gold >= cost + 3;
     }
     if (shouldUpgrade) {
       ai.gold -= cost;
@@ -511,47 +535,119 @@ function runAITurn(g: GameState, ai: PlayerState): void {
     }
   }
 
-  // 2. \u4e70\u724c\uff1a\u4f18\u5148\u4e70\u5546\u5e97\u91cc tier \u6700\u9ad8\u7684\uff0c\u624b\u724c+\u573a\u4e0a\u4e0d\u8d85 7
+  // 2. \u4e70\u5361 + \u6362\u5361
+  const canSwap = g.turn >= 8;
+  let swapsThisTurn = 0;
+  const MAX_SWAPS = 1;
+
   while (ai.gold >= BUY_COST && ai.shop.length > 0) {
-      let bestIdx = 0;
+    // \u6311\u5019\u9009\uff1a\u4f18\u5148\u4e09\u8fde\uff0c\u5176\u6b21 tier \u6700\u9ad8
+    let bestIdx = -1;
+    for (let i = 0; i < ai.shop.length; i++) {
+      if (isTripleCard(ai.shop[i])) { bestIdx = i; break; }
+    }
+    if (bestIdx < 0) {
+      bestIdx = 0;
       for (let i = 1; i < ai.shop.length; i++) {
         if (ai.shop[i].tier > ai.shop[bestIdx].tier) bestIdx = i;
       }
-      const candidate = ai.shop[bestIdx];
-      if (ai.board.length + ai.hand.length < BOARD_SIZE) {
-        ai.shop.splice(bestIdx, 1);
-        ai.gold -= BUY_COST;
-        ai.hand.push(candidate);
-      } else {
-        let worstIdx = 0;
-        for (let i = 1; i < ai.board.length; i++) {
-          if (ai.board[i].tier < ai.board[worstIdx].tier) worstIdx = i;
-        }
-        const worst = ai.board[worstIdx];
-        if (candidate.tier > worst.tier) {
-          ai.board.splice(worstIdx, 1);
-          ai.gold = Math.min(ai.gold + SELL_REFUND, MAX_GOLD);
-          logEvent(g, ai.username + " \u5356 " + worst.name + " (T" + worst.tier + ")");
-          ai.shop.splice(bestIdx, 1);
-          ai.gold -= BUY_COST;
-          ai.board.push(candidate);
-          logEvent(g, ai.username + " \u6362 " + candidate.name + " (T" + candidate.tier + ")");
-          triggerBattlecry(g, ai, candidate.id);
-        } else {
-          break;
+    }
+    const candidate = ai.shop[bestIdx];
+    const candidateTriple = isTripleCard(candidate);
+
+    // \u7a7a\u4f4d\uff1a\u76f4\u63a5\u4e70
+    if (ai.board.length + ai.hand.length < BOARD_SIZE) {
+      ai.shop.splice(bestIdx, 1);
+      ai.gold -= BUY_COST;
+      ai.hand.push(candidate);
+      const key = candidate.name + "#" + candidate.tier;
+      counts.set(key, (counts.get(key) || 0) + 1);
+      if ((counts.get(key) || 0) >= 2) tripleReady.add(key);
+      continue;
+    }
+
+    // \u6ee1\u573a\uff1a\u5224\u65ad\u662f\u5426\u6362
+    if (!candidateTriple) {
+      if (!canSwap) break;
+      if (swapsThisTurn >= MAX_SWAPS) break;
+    }
+
+    // \u627e\u6700\u5f31\u53ef\u5356\u7684\uff08\u4fdd\u62a4\u4e09\u8fde\u82d7\u5b50\uff09
+      let worstIdx = -1;
+      let worstScore = Infinity;
+      // \u4f18\u5148\u5356\u975e\u91d1\u5361
+      for (let i = 0; i < ai.board.length; i++) {
+        const c = ai.board[i];
+        if (c.golden) continue;
+        const cKey = c.name + "#" + c.tier;
+        const cCount = counts.get(cKey) || 0;
+        if (cCount >= 2) continue;
+        const sc = score(c);
+        if (sc < worstScore) {
+          worstScore = sc;
+          worstIdx = i;
         }
       }
-    }
+      // \u515c\u5e95\uff1a\u5168\u91d1\u5361\u4e5f\u80fd\u5356
+      if (worstIdx < 0) {
+        for (let i = 0; i < ai.board.length; i++) {
+          const c = ai.board[i];
+          const cKey = c.name + "#" + c.tier;
+          const cCount = counts.get(cKey) || 0;
+          if (cCount >= 2) continue;
+          const sc = score(c);
+          if (sc < worstScore) {
+            worstScore = sc;
+            worstIdx = i;
+          }
+        }
+      }
+    if (worstIdx < 0) break;
+    const worst = ai.board[worstIdx];
 
-    mergeTriplesHand(ai);
+    // \u503c\u4e0d\u503c\u5f97\u6362
+      const cScore = score(candidate);
+      const wScore = score(worst);
+      let worthSwap = false;
+      if (candidateTriple) worthSwap = true;
+      else if (criticalHp) worthSwap = cScore > wScore;
+      else if (safeHp) worthSwap = cScore >= wScore + 5;
+      else worthSwap = cScore > wScore;
+    if (!worthSwap) break;
 
-    while (ai.hand.length > 0 && ai.board.length < BOARD_SIZE) {
-      const card = ai.hand.shift()!;
-      ai.board.push(card);
-      logEvent(g, ai.username + " \u4e0a\u9635 " + card.name);
-      triggerBattlecry(g, ai, card.id);
-    }
+    // \u6267\u884c\u6362\u5361
+    ai.board.splice(worstIdx, 1);
+    ai.gold = Math.min(ai.gold + SELL_REFUND, MAX_GOLD);
+    const wKey = worst.name + "#" + worst.tier;
+    counts.set(wKey, Math.max(0, (counts.get(wKey) || 1) - 1));
+    logEvent(g, ai.username + " \u5356 " + worst.name + " (T" + worst.tier + ")");
+
+    ai.shop.splice(bestIdx, 1);
+    ai.gold -= BUY_COST;
+    ai.board.push(candidate);
+    const cKey2 = candidate.name + "#" + candidate.tier;
+    counts.set(cKey2, (counts.get(cKey2) || 0) + 1);
+    logEvent(g, ai.username + " \u6362 " + candidate.name + " (T" + candidate.tier + ")");
+    triggerBattlecry(g, ai, candidate.id);
+
+    if (!candidateTriple) swapsThisTurn++;
   }
+
+  // 3. \u4e09\u8fde\u5408\u6210
+  const triples = mergeTriplesHand(ai);
+  triples.forEach(function (m) {
+    logEvent(g, ai.username + " \u4e09\u8fde\u5408\u6210 " + m.name + "!");
+  });
+
+  // 4. \u624b\u724c\u5168\u90e8\u4e0a\u9635
+  while (ai.hand.length > 0 && ai.board.length < BOARD_SIZE) {
+    const card = ai.hand.shift()!;
+    ai.board.push(card);
+    logEvent(g, ai.username + " \u4e0a\u9635 " + card.name);
+    triggerBattlecry(g, ai, card.id);
+  }
+}
+
 
   export function playerEndTurn(
     roomId: string,
