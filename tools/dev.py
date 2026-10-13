@@ -194,6 +194,8 @@ class App:
             {"text": "\u7ebf\u4e0a\u5173\u952e\u8bcd", "cmd": lambda: self.run_short("set URL=" + ONLINE_URL + "&& node apps/server/scripts/e2e-keywords.mjs", "kw-online"), "bg": "#5a3d5a", "fg": "#e0b8ff"},
             {"text": "\u89e6\u53d1\u6d4b\u8bd5", "cmd": lambda: self.run_short("node apps/server/scripts/e2e-triggers.mjs", "trig"), "bg": "#5a4d3d", "fg": "#ffd6b8"},
             {"text": "\u7ebf\u4e0a\u89e6\u53d1", "cmd": lambda: self.run_short("set URL=" + ONLINE_URL + "&& node apps/server/scripts/e2e-triggers.mjs", "trig-online"), "bg": "#5a4d3d", "fg": "#ffd6b8"},
+            {"text": "\u672c\u5730 AI", "cmd": lambda: self.run_short("node apps/server/scripts/e2e.mjs --ai", "ai-local"), "bg": "#4d5a3d", "fg": "#c8ffb8"},
+            {"text": "\u7ebf\u4e0a AI", "cmd": lambda: self.run_short("set URL=" + ONLINE_URL + "&& node apps/server/scripts/e2e.mjs --ai", "ai-online"), "bg": "#4d5a3d", "fg": "#c8ffb8"},
             {"text": "git 提交", "cmd": self.git_commit, "bg": "#2d4d5a", "fg": "#a6d8ff"},
             {"text": "部署到线上", "cmd": self.deploy_online, "bg": "#5a3d2d", "fg": "#ffd6a6"},
             {"text": "清日志", "cmd": self.clear_logs},
