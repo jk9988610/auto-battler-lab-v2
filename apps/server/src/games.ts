@@ -244,37 +244,90 @@ function simulateBoardBattle(aBoard: Card[], bBoard: Card[]): {
   aSurvivors: Card[];
   bSurvivors: Card[];
 } {
-  const A = aBoard.map(function (c) { return { id: c.id, name: c.name, tier: c.tier, attack: c.attack, hp: c.hp, golden: c.golden }; });
-  const B = bBoard.map(function (c) { return { id: c.id, name: c.name, tier: c.tier, attack: c.attack, hp: c.hp, golden: c.golden }; });
+  type BattleCard = Card & { shield?: boolean };
+  function mk(c: Card): BattleCard {
+    const b: BattleCard = { id: c.id, name: c.name, tier: c.tier, attack: c.attack, hp: c.hp };
+    if (c.golden) b.golden = c.golden;
+    if (c.keywords) b.keywords = c.keywords.slice();
+    if (b.keywords && b.keywords.indexOf("\u5723\u76fe") >= 0) b.shield = true;
+    return b;
+  }
+  const A: BattleCard[] = aBoard.map(mk);
+  const B: BattleCard[] = bBoard.map(mk);
   const battleLog: string[] = [];
   const MAX_ROUNDS = 30;
   let round = 0;
+
+  function hasKw(c: BattleCard, kw: string): boolean {
+    return !!(c.keywords && c.keywords.indexOf(kw) >= 0);
+  }
+
+  function pickTarget(enemy: BattleCard[]): BattleCard {
+    for (let i = 0; i < enemy.length; i++) {
+      if (hasKw(enemy[i], "\u5632\u8bca")) return enemy[i];
+    }
+    return enemy[0];
+  }
+
+  function strike(attacker: BattleCard, defender: BattleCard, round: number): boolean {
+    if (defender.shield) {
+      defender.shield = false;
+      battleLog.push("R" + round + " " + attacker.name + " \u653b\u51fb " + defender.name + " (\u76fe\u6321)");
+      return false;
+    }
+    const isPoison = hasKw(attacker, "\u5267\u6bd2");
+    const before = defender.hp;
+    defender.hp -= attacker.attack;
+    battleLog.push("R" + round + " " + attacker.name + " \u653b\u51fb " + defender.name + " (" + before + "->" + defender.hp + ")");
+    if (isPoison && defender.hp > 0) {
+      defender.hp = 0;
+      battleLog.push("R" + round + " " + defender.name + " \u4e2d\u6bd2");
+    }
+    if (defender.hp <= 0) {
+      battleLog.push(defender.name + " \u9635\u4ea1");
+      return true;
+    }
+    return false;
+  }
 
   while (A.length > 0 && B.length > 0 && round < MAX_ROUNDS) {
     round += 1;
     if (A.length > 0 && B.length > 0) {
       const atkA = A[0];
-      const defB = B[0];
-      const before = defB.hp;
-      defB.hp -= atkA.attack;
-      battleLog.push("R" + round + " " + atkA.name + " -> " + defB.name + " (" + before + "->" + defB.hp + ")");
-      if (defB.hp <= 0) {
-        battleLog.push(defB.name + " 阵亡");
-        B.shift();
+      const wind = hasKw(atkA, "\u98ce\u6012") ? 2 : 1;
+      for (let i = 0; i < wind; i++) {
+        if (B.length === 0) break;
+        const defB = pickTarget(B);
+        const died = strike(atkA, defB, round);
+        if (died) {
+          const idx = B.indexOf(defB);
+          if (idx >= 0) B.splice(idx, 1);
+        }
       }
     }
     if (A.length === 0 || B.length === 0) break;
     if (A.length > 0 && B.length > 0) {
       const atkB = B[0];
-      const defA = A[0];
-      const before = defA.hp;
-      defA.hp -= atkB.attack;
-      battleLog.push("R" + round + " " + atkB.name + " -> " + defA.name + " (" + before + "->" + defA.hp + ")");
-      if (defA.hp <= 0) {
-        battleLog.push(defA.name + " 阵亡");
-        A.shift();
+      const wind = hasKw(atkB, "\u98ce\u6012") ? 2 : 1;
+      for (let i = 0; i < wind; i++) {
+        if (A.length === 0) break;
+        const defA = pickTarget(A);
+        const died = strike(atkB, defA, round);
+        if (died) {
+          const idx = A.indexOf(defA);
+          if (idx >= 0) A.splice(idx, 1);
+        }
       }
     }
+  }
+
+  function cleanShield(arr: BattleCard[]): Card[] {
+    return arr.map(function (c) {
+      const x: Card = { id: c.id, name: c.name, tier: c.tier, attack: c.attack, hp: c.hp };
+      if (c.golden) x.golden = c.golden;
+      if (c.keywords) x.keywords = c.keywords.slice();
+      return x;
+    });
   }
 
   const aAlive = A.length > 0;
@@ -283,14 +336,14 @@ function simulateBoardBattle(aBoard: Card[], bBoard: Card[]): {
   if (aAlive && !bAlive) {
     let dmg = 0;
     A.forEach(function (c) { dmg += c.attack; });
-    return { winnerSide: "a", damage: Math.max(1, dmg), battleLog: battleLog, aSurvivors: A, bSurvivors: [] };
+    return { winnerSide: "a", damage: Math.max(1, dmg), battleLog: battleLog, aSurvivors: cleanShield(A), bSurvivors: [] };
   }
   if (bAlive && !aAlive) {
     let dmg = 0;
     B.forEach(function (c) { dmg += c.attack; });
-    return { winnerSide: "b", damage: Math.max(1, dmg), battleLog: battleLog, aSurvivors: [], bSurvivors: B };
+    return { winnerSide: "b", damage: Math.max(1, dmg), battleLog: battleLog, aSurvivors: [], bSurvivors: cleanShield(B) };
   }
-  return { winnerSide: "draw", damage: 1, battleLog: battleLog, aSurvivors: A, bSurvivors: B };
+  return { winnerSide: "draw", damage: 1, battleLog: battleLog, aSurvivors: cleanShield(A), bSurvivors: cleanShield(B) };
 }
 
 function runBattle(g: GameState): BattleResult {
@@ -545,6 +598,41 @@ export function debugGiveKeywordCard(
     hp: 3,
     keywords: ["Taunt", "Shield"],
   }];
+  return { ok: true, state: g };
+}
+
+export function debugGiveCustomCard(
+  roomId: string,
+  uid: number,
+  payload: { name: string; attack: number; hp: number; keywords?: string[] }
+): { ok: boolean; error?: string; state?: GameState } {
+  const g = games.get(roomId);
+  if (!g) return { ok: false, error: "no game" };
+  const p = findPlayer(g, uid);
+  if (!p) return { ok: false, error: "not in game" };
+  const c: Card = {
+    id: Math.random().toString(36).slice(2, 8),
+    name: payload.name || "Test",
+    tier: 1,
+    attack: (payload.attack === undefined ? 1 : payload.attack),
+    hp: (payload.hp === undefined ? 1 : payload.hp),
+  };
+  if (payload.keywords && payload.keywords.length) c.keywords = payload.keywords.slice();
+  p.hand.push(c);
+  return { ok: true, state: g };
+}
+
+export function debugClearBoard(
+  roomId: string,
+  uid: number
+): { ok: boolean; error?: string; state?: GameState } {
+  const g = games.get(roomId);
+  if (!g) return { ok: false, error: "no game" };
+  const p = findPlayer(g, uid);
+  if (!p) return { ok: false, error: "not in game" };
+  p.hand = [];
+  p.board = [];
+  p.ready = false;
   return { ok: true, state: g };
 }
 

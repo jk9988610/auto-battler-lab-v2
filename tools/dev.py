@@ -182,13 +182,16 @@ class App:
         specs = [
             {"text": "启动服务器", "cmd": self.start_server, "bg": "#2d5a2d", "fg": "#d6ffd6"},
             {"text": "停止", "cmd": self.stop_server, "bg": "#5a2d2d", "fg": "#ffd6d6"},
-            {"text": "重启", "cmd": self.restart_server},
+            {"text": "重启服务", "cmd": self.restart_server},
+            {"text": "\u91cd\u542f\u5de5\u4f5c\u53f0", "cmd": self.restart_workbench, "bg": "#5a3d4d", "fg": "#ffd6e6"},
             {"text": "typecheck", "cmd": lambda: self.run_short("npm --prefix apps/server run typecheck", "typecheck")},
             {"text": "跑 e2e", "cmd": lambda: self.run_short("node apps/server/scripts/e2e.mjs", "e2e")},
             {"text": "一键三连", "cmd": lambda: self.run_short("node apps/server/scripts/e2e.mjs --triple", "triple")},
             {"text": "线上 e2e", "cmd": lambda: self.run_short("set URL=" + ONLINE_URL + "&& node apps/server/scripts/e2e.mjs", "online"), "bg": "#3d5a5a", "fg": "#a6e0e0"},
             {"text": "线上全测", "cmd": lambda: self.run_short("set URL=" + ONLINE_URL + "&& node apps/server/scripts/e2e.mjs --full", "online"), "bg": "#3d5a5a", "fg": "#a6e0e0"},
             {"text": "本地全测", "cmd": lambda: self.run_short("node apps/server/scripts/e2e.mjs --full", "full"), "bg": "#3d5a5a", "fg": "#a6e0e0"},
+            {"text": "\u5173\u952e\u8bcd\u6d4b\u8bd5", "cmd": lambda: self.run_short("node apps/server/scripts/e2e-keywords.mjs", "kw"), "bg": "#5a3d5a", "fg": "#e0b8ff"},
+            {"text": "\u7ebf\u4e0a\u5173\u952e\u8bcd", "cmd": lambda: self.run_short("set URL=" + ONLINE_URL + "&& node apps/server/scripts/e2e-keywords.mjs", "kw-online"), "bg": "#5a3d5a", "fg": "#e0b8ff"},
             {"text": "git 提交", "cmd": self.git_commit, "bg": "#2d4d5a", "fg": "#a6d8ff"},
             {"text": "部署到线上", "cmd": self.deploy_online, "bg": "#5a3d2d", "fg": "#ffd6a6"},
             {"text": "清日志", "cmd": self.clear_logs},
@@ -453,6 +456,32 @@ class App:
             self._save_cfg()
         except Exception:
             pass
+
+    def restart_workbench(self):
+        import sys
+        try:
+            self._save_geometry()
+        except Exception:
+            pass
+        try:
+            if self.server_proc:
+                self.server_proc.terminate()
+        except Exception:
+            pass
+        python = sys.executable
+        script = os.path.abspath(__file__)
+        try:
+            if sys.platform == "win32":
+                subprocess.Popen([python, script], cwd=ROOT,
+                                 creationflags=subprocess.CREATE_NO_WINDOW)
+            else:
+                subprocess.Popen([python, script], cwd=ROOT,
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception as e:
+            log_queue.put("[err] restart_workbench: " + str(e))
+            return
+        log_queue.put("[dev] \u91cd\u542f\u5de5\u4f5c\u53f0 ...")
+        self.root.after(300, self.root.destroy)
 
     def _on_close(self):
         self._save_geometry()
