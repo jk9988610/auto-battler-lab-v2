@@ -6,6 +6,8 @@ export interface Card {
   hp: number;
   golden?: boolean;
   keywords?: string[];
+  battlecry?: { type: string; value?: number; atk?: number; hp?: number };
+  deathrattle?: { type: string; value?: number; atk?: number; hp?: number };
 }
 
 export interface PlayerState {
@@ -72,7 +74,7 @@ const UPGRADE_COST: { [k: number]: number } = {
   5: 10,
 };
 
-const CARD_POOL: Array<{ name: string; tier: number; attack: number; hp: number; keywords?: string[] }> = [
+const CARD_POOL: Array<{ name: string; tier: number; attack: number; hp: number; keywords?: string[]; battlecry?: any; deathrattle?: any }> = [
   // T1
   { name: "\u94c1\u5320\u5b66\u5f92", tier: 1, attack: 1, hp: 1 },
   { name: "\u68ee\u6797\u9e7f", tier: 1, attack: 2, hp: 2 },
@@ -136,6 +138,8 @@ function randCard(maxTier: number): Card {
   const uid = Math.random().toString(36).slice(2, 8);
   const card: Card = { id: uid, name: tpl.name, tier: tpl.tier, attack: tpl.attack, hp: tpl.hp };
   if (tpl.keywords && tpl.keywords.length > 0) card.keywords = tpl.keywords.slice();
+  if (tpl.battlecry) card.battlecry = JSON.parse(JSON.stringify(tpl.battlecry));
+  if (tpl.deathrattle) card.deathrattle = JSON.parse(JSON.stringify(tpl.deathrattle));
   return card;
 }
 
@@ -249,6 +253,8 @@ function simulateBoardBattle(aBoard: Card[], bBoard: Card[]): {
     const b: BattleCard = { id: c.id, name: c.name, tier: c.tier, attack: c.attack, hp: c.hp };
     if (c.golden) b.golden = c.golden;
     if (c.keywords) b.keywords = c.keywords.slice();
+    if (c.battlecry) b.battlecry = JSON.parse(JSON.stringify(c.battlecry));
+    if (c.deathrattle) b.deathrattle = JSON.parse(JSON.stringify(c.deathrattle));
     if (b.keywords && b.keywords.indexOf("\u5723\u76fe") >= 0) b.shield = true;
     return b;
   }
@@ -269,7 +275,33 @@ function simulateBoardBattle(aBoard: Card[], bBoard: Card[]): {
     return enemy[0];
   }
 
-  function strike(attacker: BattleCard, defender: BattleCard, round: number): boolean {
+  function triggerDeathrattle(defender: BattleCard, ownArr: BattleCard[], enemyArr: BattleCard[], round: number): void {
+    const dr = defender.deathrattle;
+    if (!dr) return;
+    if (dr.type === "dmg_enemy") {
+      const v = dr.value || 0;
+      battleLog.push("R" + round + " (\u4ea1\u8bed) " + defender.name + " \u5bf9\u654c\u65b9\u5168\u4f53\u9020\u6210 " + v + " \u4f24\u5bb3");
+      for (let i = enemyArr.length - 1; i >= 0; i--) {
+        enemyArr[i].hp -= v;
+        if (enemyArr[i].hp <= 0) {
+          battleLog.push("R" + round + " " + enemyArr[i].name + " \u9635\u4ea1 (\u4ea1\u8bed)");
+          enemyArr.splice(i, 1);
+        }
+      }
+    } else if (dr.type === "summon") {
+      const nc: BattleCard = {
+        id: Math.random().toString(36).slice(2, 8),
+        name: "\u53ec\u5524\u7269",
+        tier: 1,
+        attack: dr.atk || 1,
+        hp: dr.hp || 1,
+      };
+      ownArr.push(nc);
+      battleLog.push("R" + round + " (\u4ea1\u8bed) " + defender.name + " \u53ec\u5524 " + nc.name + " " + nc.attack + "/" + nc.hp);
+    }
+  }
+
+  function strike(attacker: BattleCard, defender: BattleCard, round: number, ownArr: BattleCard[], enemyArr: BattleCard[]): boolean {
     if (defender.shield) {
       defender.shield = false;
       battleLog.push("R" + round + " " + attacker.name + " \u653b\u51fb " + defender.name + " (\u76fe\u6321)");
@@ -285,6 +317,7 @@ function simulateBoardBattle(aBoard: Card[], bBoard: Card[]): {
     }
     if (defender.hp <= 0) {
       battleLog.push(defender.name + " \u9635\u4ea1");
+      triggerDeathrattle(defender, ownArr, enemyArr, round);
       return true;
     }
     return false;
@@ -298,7 +331,7 @@ function simulateBoardBattle(aBoard: Card[], bBoard: Card[]): {
       for (let i = 0; i < wind; i++) {
         if (B.length === 0) break;
         const defB = pickTarget(B);
-        const died = strike(atkA, defB, round);
+        const died = strike(atkA, defB, round, B, A);
         if (died) {
           const idx = B.indexOf(defB);
           if (idx >= 0) B.splice(idx, 1);
@@ -312,7 +345,7 @@ function simulateBoardBattle(aBoard: Card[], bBoard: Card[]): {
       for (let i = 0; i < wind; i++) {
         if (A.length === 0) break;
         const defA = pickTarget(A);
-        const died = strike(atkB, defA, round);
+        const died = strike(atkB, defA, round, A, B);
         if (died) {
           const idx = A.indexOf(defA);
           if (idx >= 0) A.splice(idx, 1);
@@ -326,6 +359,8 @@ function simulateBoardBattle(aBoard: Card[], bBoard: Card[]): {
       const x: Card = { id: c.id, name: c.name, tier: c.tier, attack: c.attack, hp: c.hp };
       if (c.golden) x.golden = c.golden;
       if (c.keywords) x.keywords = c.keywords.slice();
+      if (c.battlecry) x.battlecry = JSON.parse(JSON.stringify(c.battlecry));
+      if (c.deathrattle) x.deathrattle = JSON.parse(JSON.stringify(c.deathrattle));
       return x;
     });
   }
@@ -488,6 +523,27 @@ export function playerSell(
   return { ok: true, state: g };
 }
 
+function triggerBattlecry(g: GameState, p: PlayerState, sourceId: string): void {
+  const card = p.board.find(function (c) { return c.id === sourceId; });
+  if (!card || !card.battlecry) return;
+  const bc = card.battlecry;
+  if (bc.type === "buff_all") {
+    const v = bc.value || 0;
+    p.board.forEach(function (c) {
+      if (c.id === sourceId) return;
+      c.attack += v;
+      c.hp += v;
+    });
+  } else if (bc.type === "dmg_enemy") {
+    const v = bc.value || 0;
+    g.players.forEach(function (other) {
+      if (other.uid === p.uid || !other.alive) return;
+      other.board.forEach(function (c) { c.hp -= v; });
+      other.board = other.board.filter(function (c) { return c.hp > 0; });
+    });
+  }
+}
+
 export function playerPlace(
   roomId: string,
   uid: number,
@@ -501,6 +557,7 @@ export function playerPlace(
   if (p.board.length >= BOARD_SIZE) return { ok: false, error: "board full" };
   const card = p.hand.splice(handIndex, 1)[0];
   p.board.push(card);
+  triggerBattlecry(g, p, card.id);
   return { ok: true, state: g };
 }
 
@@ -604,7 +661,7 @@ export function debugGiveKeywordCard(
 export function debugGiveCustomCard(
   roomId: string,
   uid: number,
-  payload: { name: string; attack: number; hp: number; keywords?: string[] }
+  payload: { name: string; attack: number; hp: number; keywords?: string[]; battlecry?: any; deathrattle?: any }
 ): { ok: boolean; error?: string; state?: GameState } {
   const g = games.get(roomId);
   if (!g) return { ok: false, error: "no game" };
@@ -618,6 +675,8 @@ export function debugGiveCustomCard(
     hp: (payload.hp === undefined ? 1 : payload.hp),
   };
   if (payload.keywords && payload.keywords.length) c.keywords = payload.keywords.slice();
+  if (payload.battlecry) c.battlecry = JSON.parse(JSON.stringify(payload.battlecry));
+  if (payload.deathrattle) c.deathrattle = JSON.parse(JSON.stringify(payload.deathrattle));
   p.hand.push(c);
   return { ok: true, state: g };
 }
